@@ -2640,7 +2640,7 @@
         TitanMine: new Action("Titan Mine", "space", "titan_mine", "spc_titan"),
         TitanStorehouse: new Action("Titan Storehouse", "space", "storehouse", "spc_titan"),
         TitanBank: new Action("Titan Bank", "space", "titan_bank", "spc_titan"),
-        TitanGraphene: new Action("Titan Graphene Plant", "space", "g_factory", "spc_titan"),
+        TitanGraphene: new Action("Titan Graphene Plant", "space", "g_factory", "spc_titan", {smart: true}),
         TitanSAM: new Action("Titan SAM Site", "space", "sam", "spc_titan"),
         TitanDecoder: new Action("Titan Decoder", "space", "decoder", "spc_titan"),
         TitanAI: new Action("Titan AI Core", "space", "ai_core", "spc_titan", {multiSegmented: true}),
@@ -2750,7 +2750,7 @@
         AlphaFusion: new Action("Alpha Fusion Reactor", "interstellar", "fusion", "int_alpha"),
         AlphaLaboratory: new Action("Alpha Laboratory", "interstellar", "laboratory", "int_alpha", {knowledge: true}),
         AlphaExchange: new Action("Alpha Exchange", "interstellar", "exchange", "int_alpha"),
-        AlphaGraphenePlant: new Action("Alpha Graphene Plant", "interstellar", "g_factory", "int_alpha"),
+        AlphaGraphenePlant: new Action("Alpha Graphene Plant", "interstellar", "g_factory", "int_alpha", {smart: true}),
         AlphaWarehouse: new Action("Alpha Warehouse", "interstellar", "warehouse", "int_alpha"),
         AlphaMegaFactory: new Action("Alpha Mega Factory", "interstellar", "int_factory", "int_alpha"),
         AlphaLuxuryCondo: new Action("Alpha Luxury Condo", "interstellar", "luxury_condo", "int_alpha", {housing: true}),
@@ -13604,6 +13604,10 @@ declare global {
                             resources.Elerium.incomeAdusted = true;
                         }
                     }
+                }
+                // Disable graphene plants when graphene not needed (saves support)
+                if ((building === buildings.AlphaGraphenePlant || building === buildings.TitanGraphene) && !resources.Graphene.isUseful()) {
+                    maxStateOn = 0;
                 }
                 // Limit lander to sustainable amount
                 if (building === buildings.TritonLander) {
