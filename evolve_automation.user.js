@@ -5232,12 +5232,14 @@
             if (buildings.PitSoulForge.count > 0 && (buildings.PitSoulForge.autoStateEnabled || buildings.PitSoulForge.stateOnCount > 0) && soldierRating > 0) {
                 // Calculate number of soldiers needed for Soul Forge
                 let base = game.global.race['warlord'] ? 400 : 650;
-             let soulForgeSoldiers = Math.round(base / soldierRating);
-        
+                let soulForgeSoldiers = Math.ceil(base / soldierRating);
+
                 // Adjust for gun emplacements
                 if (buildings.PitGunEmplacement.count > 0) {
-                    soulForgeSoldiers -= Math.floor(buildings.PitGunEmplacement.stateOnCount * 1.5);
-                    soulForgeSoldiers = Math.max(1, soulForgeSoldiers);
+                    let soldiersPerGun = game.global.tech.hell_gun >= 2 ? 2 : 1;
+                    soldiersPerGun *= traitVal('high_pop', 0, 1);  // jobScale equivalent
+                    soulForgeSoldiers -= buildings.PitGunEmplacement.stateOnCount * soldiersPerGun;
+                    soulForgeSoldiers = Math.max(0, soulForgeSoldiers);  // Can be 0 if guns cover all
                 }
 
                 soldiers += soulForgeSoldiers;
@@ -11674,10 +11676,19 @@ declare global {
             return;
         }
 
-        let chrysotileWeigth = resources.Chrysotile.isDemanded() ? Number.MAX_SAFE_INTEGER : (100 - resources.Chrysotile.storageRatio * 100);
-        let stoneWeigth = resources.Stone.isDemanded() ? Number.MAX_SAFE_INTEGER : (100 - resources.Stone.storageRatio * 100);
+        // Use spare ratio (accounts for trigger reservations) instead of storage ratio to avoid deadlocks
+        // when triggers reserve resources but storage appears full
+        // If maxQuantity is 0, treat spare ratio as 0 (max weight) to prioritize production
+        let chrysotileSpareRatio = resources.Chrysotile.maxQuantity > 0 ? Math.max(0, resources.Chrysotile.spareQuantity / resources.Chrysotile.maxQuantity) : 0;
+        let chrysotileWeigth = resources.Chrysotile.isDemanded() ? Number.MAX_SAFE_INTEGER : (100 - chrysotileSpareRatio * 100);
+        let stoneSpareRatio = resources.Stone.maxQuantity > 0 ? Math.max(0, resources.Stone.spareQuantity / resources.Stone.maxQuantity) : 0;
+        let stoneWeigth = resources.Stone.isDemanded() ? Number.MAX_SAFE_INTEGER : (100 - stoneSpareRatio * 100);
         if (buildings.MetalRefinery.count > 0) {
-            stoneWeigth = Math.max(stoneWeigth, resources.Aluminium.isDemanded() ? Number.MAX_SAFE_INTEGER : (100 - resources.Aluminium.storageRatio * 100));
+            let aluminiumSpareRatio = resources.Aluminium.maxQuantity > 0 ? Math.max(0, resources.Aluminium.spareQuantity / resources.Aluminium.maxQuantity) : 0;
+            // Don't use MAX_SAFE_INTEGER for aluminium->stone: it would completely starve chrysotile production
+            // when both are needed for the same building (e.g. trigger needs chrysotile + aluminium)
+            let aluminiumBasedWeight = 100 - aluminiumSpareRatio * 100;
+            stoneWeigth = Math.max(stoneWeigth, aluminiumBasedWeight);
         }
         chrysotileWeigth *= settings.productionChrysotileWeight;
 
@@ -13775,7 +13786,23 @@ declare global {
                     }
                 }
                 if (building === buildings.EnceladusWaterFreighter && !resources.Water.isUseful()) {
-                    maxStateOn = Math.min(maxStateOn, resources.Water.getBusyWorkers("space_water_freighter_title", currentStateOn));
+                    // Calculate water consumption from buildings that exist (potential demand)
+                    let potentialDemand = buildings.TitanQuarters.count * 12 +
+                                          buildings.TitanElectrolysis.count * 35 +
+                                          buildings.TitanAIComplete.count * 1000;
+
+                    if (potentialDemand > 0) {
+                        if (currentStateOn > 0) {
+                            // Calculate production per freighter from actual game data
+                            let totalProduction = resources.Water.getProduction("space_water_freighter_title");
+                            let productionPerFreighter = totalProduction / currentStateOn;
+                            let neededFreighters = Math.ceil(potentialDemand / productionPerFreighter);
+                            maxStateOn = Math.min(maxStateOn, neededFreighters);
+                        }
+                        // If no freighters running, don't limit - let them enable to bootstrap
+                    } else {
+                        maxStateOn = Math.min(maxStateOn, resources.Water.getBusyWorkers("space_water_freighter_title", currentStateOn));
+                    }
                     if (maxStateOn !== currentStateOn) {
                         resources.Water.incomeAdusted = true;
                     }
