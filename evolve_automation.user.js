@@ -9559,6 +9559,9 @@ declare global {
             autoMiningDroid: false,
             autoReplicator: false,
             productionChrysotileWeight: 2,
+            productionChrysotileMinRatio: 20,
+            productionStoneMinRatio: 20,
+            productionQuarryIgnoreAluminiumDroids: true,
             productionAdamantiteWeight: 1,
             productionExtWeight_common: 1,
             productionExtWeight_uncommon: 1,
@@ -11671,29 +11674,53 @@ declare global {
     }
 
     function autoQuarry() {
-        // Nothing to do here with no quarry, or smoldering
+        // Nothing to do here with no quarry, or not smoldering
+        // Note: Rock Quarry has not_trait: ['sappy'], so plant/heat hybrids can't build it
         if (!QuarryManager.initIndustry()) {
             return;
         }
 
-        // Use spare ratio (accounts for trigger reservations) instead of storage ratio to avoid deadlocks
-        // when triggers reserve resources but storage appears full
-        // If maxQuantity is 0, treat spare ratio as 0 (max weight) to prioritize production
+        // Calculate "need" for each resource (0-1 scale, where 1 = fully demanded/empty)
+        // Use spare ratio to account for trigger reservations
         let chrysotileSpareRatio = resources.Chrysotile.maxQuantity > 0 ? Math.max(0, resources.Chrysotile.spareQuantity / resources.Chrysotile.maxQuantity) : 0;
-        let chrysotileWeigth = resources.Chrysotile.isDemanded() ? Number.MAX_SAFE_INTEGER : (100 - chrysotileSpareRatio * 100);
+        let chrysotileNeed = resources.Chrysotile.isDemanded() ? 1 : (1 - chrysotileSpareRatio);
+
         let stoneSpareRatio = resources.Stone.maxQuantity > 0 ? Math.max(0, resources.Stone.spareQuantity / resources.Stone.maxQuantity) : 0;
-        let stoneWeigth = resources.Stone.isDemanded() ? Number.MAX_SAFE_INTEGER : (100 - stoneSpareRatio * 100);
-        if (buildings.MetalRefinery.count > 0) {
+        let stoneNeed = resources.Stone.isDemanded() ? 1 : (1 - stoneSpareRatio);
+
+        let aluminiumNeed = 0;
+        // Factor in aluminium demand if smelting is available, unless mining droids can produce it instead
+        let ignoreDroids = settings.productionQuarryIgnoreAluminiumDroids && buildings.AlphaMiningDroid.count > 0;
+        if (buildings.MetalRefinery.count > 0 && !ignoreDroids) {
             let aluminiumSpareRatio = resources.Aluminium.maxQuantity > 0 ? Math.max(0, resources.Aluminium.spareQuantity / resources.Aluminium.maxQuantity) : 0;
-            // Don't use MAX_SAFE_INTEGER for aluminium->stone: it would completely starve chrysotile production
-            // when both are needed for the same building (e.g. trigger needs chrysotile + aluminium)
-            let aluminiumBasedWeight = 100 - aluminiumSpareRatio * 100;
-            stoneWeigth = Math.max(stoneWeigth, aluminiumBasedWeight);
+            aluminiumNeed = resources.Aluminium.isDemanded() ? 1 : (1 - aluminiumSpareRatio);
         }
-        chrysotileWeigth *= settings.productionChrysotileWeight;
+
+        // Apply weights: chrysotile has configurable weight (default 2), stone and aluminium each have weight 1
+        // Stone and aluminium weights are summed since they share production
+        // Example: all 3 demanded → chrysotile=2, stone+aluminium=1+1=2 → 50/50 split
+        let chrysotileWeigth = chrysotileNeed * settings.productionChrysotileWeight;
+        let combinedStoneWeigth = (stoneNeed * 1) + (aluminiumNeed * 1);
 
         let currentRatio = QuarryManager.currentProduction();
-        let newRatio = Math.round(chrysotileWeigth / (chrysotileWeigth + stoneWeigth) * 100);
+        let totalWeight = chrysotileWeigth + combinedStoneWeigth;
+        let newRatio = totalWeight > 0 ? Math.round(chrysotileWeigth / totalWeight * 100) : 50;
+
+        // Apply minimum ratio settings, unless that resource's storage is full
+        let minChrysotileRatio = settings.productionChrysotileMinRatio ?? 0;
+        let minStoneRatio = settings.productionStoneMinRatio ?? 0;
+
+        // Chrysotile minimum: unless chrysotile storage is full
+        if (resources.Chrysotile.storageRatio < 0.99 && newRatio < minChrysotileRatio) {
+            newRatio = minChrysotileRatio;
+        }
+
+        // Stone minimum: unless both stone and aluminium storage are full
+        let stoneAluminiumFull = resources.Stone.storageRatio >= 0.99 &&
+            (buildings.MetalRefinery.count === 0 || resources.Aluminium.storageRatio >= 0.99);
+        if (!stoneAluminiumFull && (100 - newRatio) < minStoneRatio) {
+            newRatio = 100 - minStoneRatio;
+        }
 
         QuarryManager.increaseProduction(newRatio - currentRatio);
     }
@@ -18095,6 +18122,133 @@ declare global {
         .appendTo(node);
     }
 
+    function addSettingsRangeSlider(node, settingNameMin, settingNameMax, labelText, hintText, minLabel, maxLabel) {
+        let minVal = settingsRaw[settingNameMin] ?? 0;
+        let maxVal = 100 - (settingsRaw[settingNameMax] ?? 0); // Convert stone min to chrysotile max
+
+        // Add CSS for range slider matching game's sliderbar style
+        if (!document.getElementById('script-range-slider-css')) {
+            // Get theme colors from game's existing elements
+            let successColor = getComputedStyle(document.documentElement).getPropertyValue('--success') ||
+                               getComputedStyle($('.has-text-success')[0] || document.body).color || '#48c78e';
+            let bgColor = getComputedStyle(document.body).backgroundColor || '#1f2424';
+            // Darken background slightly for track
+            let trackBg = $('html').hasClass('light') || $('html').hasClass('gruvboxLight') ? '#dbdbdb' : '#363636';
+
+            $('<style id="script-range-slider-css">').text(`
+                .script-sliderbar {
+                    display: flex;
+                    align-items: center;
+                    margin: 8px 0;
+                }
+                .script-sliderbar > span.sub,
+                .script-sliderbar > span.add {
+                    display: inline-block;
+                    width: 24px;
+                    text-align: center;
+                    cursor: pointer;
+                    font-size: 16px;
+                    user-select: none;
+                }
+                .script-sliderbar .script-slider-track {
+                    flex-grow: 1;
+                    height: 1rem;
+                    background: ${trackBg};
+                    border-radius: 4px;
+                    position: relative;
+                    margin: 0 8px;
+                }
+                .script-sliderbar .ui-slider-range {
+                    position: absolute;
+                    height: 100%;
+                    border-radius: 4px;
+                }
+                .script-sliderbar .ui-slider-handle {
+                    position: absolute;
+                    width: 1rem;
+                    height: 1.5rem;
+                    border: none;
+                    border-radius: 3px;
+                    top: -0.25rem;
+                    margin-left: -0.5rem;
+                    cursor: pointer;
+                    outline: none;
+                }
+                .script-sliderbar .range-label {
+                    font-size: 11px;
+                    min-width: 95px;
+                    white-space: nowrap;
+                }
+                .script-sliderbar .range-label.right {
+                    text-align: right;
+                }
+            `).appendTo('head');
+        }
+
+        let container = $(`
+          <div class="script_bg_${settingNameMin}" style="margin-top: 10px; display: inline-block; width: 90%; text-align: left;">
+            <label title="${hintText}" tabindex="0">
+              <span>${labelText}</span>
+            </label>
+            <div class="script-sliderbar">
+              <span class="range-label">${minLabel}: <span class="range-min-display">${minVal}</span>%</span>
+              <span class="sub has-text-success" role="button" aria-label="Decrease minimum">&laquo;</span>
+              <div class="script-slider-track script_range_slider_${settingNameMin}"></div>
+              <span class="add has-text-success" role="button" aria-label="Increase maximum">&raquo;</span>
+              <span class="range-label right">${maxLabel}: <span class="range-max-display">${100 - maxVal}</span>%</span>
+            </div>
+          </div>`)
+        .appendTo(node);
+
+        let sliderEl = container.find(`.script_range_slider_${settingNameMin}`);
+
+        // Get the theme's success color for slider styling
+        let successColor = getComputedStyle($('.has-text-success')[0] || document.body).color || '#48c78e';
+
+        // Initialize jQuery UI slider after appending to DOM
+        sliderEl.slider({
+            range: true,
+            min: 0,
+            max: 100,
+            values: [minVal, maxVal],
+            slide: function(event, ui) {
+                if (ui.values[0] > ui.values[1]) {
+                    return false;
+                }
+                container.find('.range-min-display').text(ui.values[0]);
+                container.find('.range-max-display').text(100 - ui.values[1]);
+            },
+            change: function(event, ui) {
+                settingsRaw[settingNameMin] = ui.values[0];
+                settingsRaw[settingNameMax] = 100 - ui.values[1];
+                updateSettingsFromState();
+            }
+        });
+
+        // Apply theme color to slider elements
+        sliderEl.find('.ui-slider-range').css('background', successColor);
+        sliderEl.find('.ui-slider-handle').css('background', successColor);
+
+        // Arrow button handlers - adjust nearest handle
+        container.find('.sub').on('click', function() {
+            let values = sliderEl.slider('values');
+            // Decrease the lower handle (min chrysotile)
+            if (values[0] > 0) {
+                sliderEl.slider('values', 0, values[0] - 1);
+            }
+        });
+
+        container.find('.add').on('click', function() {
+            let values = sliderEl.slider('values');
+            // Increase the upper handle (max chrysotile / decrease min stone)
+            if (values[1] < 100) {
+                sliderEl.slider('values', 1, values[1] + 1);
+            }
+        });
+
+        return container;
+    }
+
     function addSettingsString(node, settingName, labelText, hintText) {
         return $(`
           <div class="script_bg_${settingName}" style="margin-top: 5px; display: inline-block; width: 90%; text-align: left;">
@@ -20320,6 +20474,11 @@ declare global {
         currentNode.empty().off("*");
 
         addSettingsNumber(currentNode, "productionChrysotileWeight", "Chrysotile weighting (Quarry, Smoldering)", "Chrysotile weighting for autoQuarry, applies after adjusting to difference between current amounts of Stone and Chrysotile");
+        addSettingsRangeSlider(currentNode, "productionChrysotileMinRatio", "productionStoneMinRatio",
+            "Quarry production ratio limits (Smoldering)",
+            "Set minimum production ratios for Chrysotile (left) and Stone/Aluminium (right). The automatic weighting operates within this range. Minimums are ignored when that resource's storage is full.",
+            "Min Chrysotile", "Min Stone");
+        addSettingsToggle(currentNode, "productionQuarryIgnoreAluminiumDroids", "Ignore Aluminium weight with Mining Droids (Quarry, Smoldering)", "When Alpha Centauri Mining Droids are available, stop factoring Aluminium demand into quarry production ratio.");
         addSettingsNumber(currentNode, "productionAdamantiteWeight", "Adamantite weighting (Mine, The True Path)", "Adamantite weighting for autoMine, applies after adjusting to difference between current amounts of Aluminium and Adamantite");
         addSettingsNumber(currentNode, "productionExtWeight_common", "Aluminium weighting (Extractor Ship, The True Path)", "Aluminium weighting for autoExtractor, applies after adjusting to difference between current amounts of Iron and Aluminium");
         addSettingsNumber(currentNode, "productionExtWeight_uncommon", "Neutronium weighting (Extractor Ship, The True Path)", "Neutronium weighting for autoExtractor, applies after adjusting to difference between current amounts of Iridium and Neutronium");
