@@ -5827,6 +5827,9 @@
             }
 
             if (this.updateSpire()) {
+                // Temporarily set isActive to prevent recursion from createMechInfo() below
+                // Will be restored after createMechInfo() - actual isActive is managed by autoMech()
+                let wasActive = this.isActive;
                 this.isActive = true;
 
                 this.updateBestWeapon();
@@ -5845,6 +5848,9 @@
 
                 // Redraw added label of Mech Lab after change of floor
                 createMechInfo();
+
+                // Restore isActive - don't let initLab() change it permanently
+                this.isActive = wasActive;
             }
 
             let bestMech = this.bestMech[this.bestSize[0]];
@@ -6018,17 +6024,27 @@
         },
 
         getMechSpace(mech, prep) {
+            let compact = (prep ?? game.global.blood.prepared) >= 2;
             switch (mech.size){
                 case 'small':
                     return 2;
                 case 'medium':
-                    return (prep ?? game.global.blood.prepared) >= 2 ? 4 : 5;
+                    return compact ? 4 : 5;
                 case 'large':
-                    return (prep ?? game.global.blood.prepared) >= 2 ? 8 : 10;
+                    return compact ? 8 : 10;
                 case 'titan':
-                    return (prep ?? game.global.blood.prepared) >= 2 ? 20 : 25;
+                    return compact ? 20 : 25;
                 case 'collector':
                     return 1;
+                // Demon/Warlord mech types
+                case 'minion':
+                    return 1;
+                case 'fiend':
+                    return compact ? 3 : 4;
+                case 'cyberdemon':
+                    return compact ? 6 : 8;
+                case 'archfiend':
+                    return compact ? 15 : 20;
             }
             return Number.MAX_SAFE_INTEGER;
         },
@@ -15111,7 +15127,10 @@ declare global {
             m.buildMech(newMech);
             resources.Supply.currentQuantity -= newSupply;
             resources.Soul_Gem.currentQuantity -= newGems;
-            m.isActive = prolongActive;
+            // Reserve supplies for next mech if there's still space
+            let remainingSpace = baySpace - newSpace;
+            let minSpaceNeeded = settings.mechFillBay ? 2 : newSpace;
+            m.isActive = remainingSpace >= minSpaceNeeded;
             return;
         }
     }
