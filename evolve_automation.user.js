@@ -13725,13 +13725,25 @@ declare global {
                 // Disable useless Guard Post
                 if (building === buildings.RuinsGuardPost) {
                     if (isHellSupressUseful()) {
-                        let postRating = game.armyRating(traitVal('high_pop', 0, 1), "hellArmy", 0) * traitVal('holy', 1, '+');
-                        let postAdjust = (5001 - poly.hellSupression("ruins").rating) / postRating;
+                        let dominated = poly.hellSupression("ruins").supress >= 1;
                         if (haveTech('hell_gate')) {
-                            postAdjust = Math.max(postAdjust, (7501 - poly.hellSupression("gate").rating) / postRating);
+                            dominated = dominated && poly.hellSupression("gate").supress >= 1;
                         }
-                        // We're reserving just one soldier for Guard Posts, so let's increase them by 1
-                        maxStateOn = Math.min(maxStateOn, currentStateOn + 1, currentStateOn + Math.ceil(postAdjust));
+                        // Check if we can safely reduce by 1 (would still have 100% suppression)
+                        let canReduce = currentStateOn > 0 && poly.hellSupression("ruins", currentStateOn - 1).supress >= 1;
+                        if (canReduce && haveTech('hell_gate')) {
+                            canReduce = poly.hellSupression("gate", currentStateOn - 1).supress >= 1;
+                        }
+                        if (!dominated) {
+                            // Under 100%, increase by 1
+                            maxStateOn = Math.min(maxStateOn, currentStateOn + 1);
+                        } else if (canReduce) {
+                            // Can safely reduce by 1 and still maintain 100%
+                            maxStateOn = Math.min(maxStateOn, currentStateOn - 1);
+                        } else {
+                            // At 100% but can't reduce without going under
+                            maxStateOn = Math.min(maxStateOn, currentStateOn);
+                        }
                     } else {
                         maxStateOn = 0;
                     }
