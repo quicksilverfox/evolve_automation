@@ -2352,6 +2352,43 @@
             return `${getNiceNumber(wallRepair)} seconds to repair 1% of wall<br>${getNiceNumber(carRepair)} seconds to repair car`;
         };
 
+        tooltipInfo["portal-sensor_drone"] = (obj) => {
+            const sensorsBuilt = obj.count ?? 0;
+            const sensorsOn = obj.stateOnCount ?? 0;
+            const infTech = game.global.tech?.infernite ?? 0;
+            const droneRate = infTech >= 6 ? 0.5 : (infTech >= 4 ? 0.2 : 0.1);
+
+            // Get production directly from game breakdown (bypass script's rateMods)
+            // Sum base production entries (values ending in 'v' are absolute, '%' are multipliers)
+            const breakdown = game.breakdown?.p?.Infernite ?? {};
+            let baseProduction = 0;
+            for (let [label, value] of Object.entries(breakdown)) {
+                if (typeof value === 'string' && value.endsWith('v')) {
+                    baseProduction += parseFloat(value) || 0;
+                }
+            }
+
+            // Apply global production modifier
+            baseProduction *= state.globalProductionModifier;
+
+            // Calculate what next drone adds: baseProduction * droneRate
+            const addedProduction = baseProduction * droneRate;
+            const nextDroneCost = Math.round(100 * Math.pow(1.25, sensorsBuilt));
+            const paybackSeconds = addedProduction > 0 ? nextDroneCost / addedProduction : Infinity;
+            const paybackMinutes = paybackSeconds / 60;
+            let paybackStr;
+            if (!isFinite(paybackSeconds) || paybackSeconds > 86400) {
+                paybackStr = 'Never';
+            } else if (paybackMinutes < 1) {
+                paybackStr = `${Math.round(paybackSeconds)}s`;
+            } else if (paybackMinutes < 60) {
+                paybackStr = `${Math.round(paybackMinutes)} min`;
+            } else {
+                paybackStr = `${getNiceNumber(paybackMinutes / 60)} hrs`;
+            }
+            return `Next: +${getNiceNumber(addedProduction)}/s<br>Payback: ${paybackStr}`;
+        };
+
         tooltipInfo["portal-attractor"] = (obj) => {
             let influx = 5 * (1 + (obj.stateOnCount * 0.22));
             let gem_chance = game.global.stats.achieve.technophobe?.l >= 5 ? 9000 : 10000;
