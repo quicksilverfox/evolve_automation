@@ -16271,15 +16271,23 @@ declare global {
         let dataId = obj._vueBinding;
 
         // Check for script's built-in tooltip handler
-        if (tooltipInfo[dataId]) {
-            let result = tooltipInfo[dataId](obj);
-            if (result) sections.push(result);
+        if (dataId && tooltipInfo[dataId]) {
+            try {
+                let result = tooltipInfo[dataId](obj);
+                if (result) sections.push(result);
+            } catch (e) {
+                console.error("Tooltip handler error:", dataId, e);
+            }
         }
 
         // Check for snippet-added tooltip handler (cleared each tick)
-        if (snippetTooltipInfo[dataId]) {
-            let result = snippetTooltipInfo[dataId](obj);
-            if (result) sections.push(result);
+        if (dataId && snippetTooltipInfo[dataId]) {
+            try {
+                let result = snippetTooltipInfo[dataId](obj);
+                if (result) sections.push(result);
+            } catch (e) {
+                console.error("Snippet tooltip handler error:", dataId, e);
+            }
         }
 
         // Conflict detection (applies to all buildings/techs)
@@ -16402,15 +16410,20 @@ declare global {
         }
 
         // Check for snippet sidebar content (cleared each tick)
-        let sidebarContent = snippetTooltipSidebar[obj._vueBinding];
-        if (sidebarContent) {
-            let sidebarResult = typeof sidebarContent === 'function' ? sidebarContent(obj) : sidebarContent;
-            if (sidebarResult) {
-                showSidebarPanel(node, sidebarResult);
+        try {
+            let sidebarContent = obj._vueBinding ? snippetTooltipSidebar[obj._vueBinding] : null;
+            if (sidebarContent) {
+                let sidebarResult = typeof sidebarContent === 'function' ? sidebarContent(obj) : sidebarContent;
+                if (sidebarResult) {
+                    showSidebarPanel(node, sidebarResult);
+                } else {
+                    hideSidebarPanel();
+                }
             } else {
                 hideSidebarPanel();
             }
-        } else {
+        } catch (e) {
+            console.error("Tooltip sidebar error:", e);
             hideSidebarPanel();
         }
     }
