@@ -2262,6 +2262,170 @@
     var craftablesList = [];
     var foundryList = [];
 
+    // Script's built-in tooltip handlers - persistent, keyed by building._vueBinding
+    var tooltipInfo = {};
+
+    // Snippet tooltip handlers - cleared each tick, rebuilt by running snippets
+    // This ensures removed/disabled snippets don't leave stale handlers
+    var snippetTooltipInfo = {};
+
+    // Sidebar tooltip content map - also cleared each tick
+    var snippetTooltipSidebar = {};
+
+    // Sidebar panel element ID
+    const SIDEBAR_PANEL_ID = 'script-tooltip-sidebar';
+
+    function initTooltipInfo() {
+        tooltipInfo["portal-p_turret"] = (obj) => {
+            let diff = getCitadelConsumption(obj.stateOnCount + 1) - getCitadelConsumption(obj.stateOnCount);
+            return `Next level will increase total consumption by ${getNiceNumber(diff)} MW`;
+        };
+
+        tooltipInfo["portal-mechbay"] = (obj) => {
+            if (!MechManager.initLab()) return "";
+            let notes = [`Current team potential: ${getNiceNumber(MechManager.mechsPotential)}`];
+            let supplyCollected = MechManager.activeMechs
+                .filter(mech => mech.size === 'collector')
+                .reduce((sum, mech) => sum + (mech.power * MechManager.collectorValue), 0);
+            if (supplyCollected > 0) {
+                notes.push(`Supplies collected: ${getNiceNumber(supplyCollected)} /s`);
+            }
+            return notes.join("<br>");
+        };
+
+        tooltipInfo["galaxy-freighter"] = (obj) => {
+            if (!haveTech('banking', 13)) return "";
+            let count = obj.stateOnCount;
+            let total = (((1 + ((count + 1) * 0.03)) / (1 + ((count) * 0.03))) - 1) * 100;
+            let crew = total / 3;
+            return `Next level will increase ${buildings.AlphaExchange.title} storage by +${getNiceNumber(total)}% (+${getNiceNumber(crew)}% per crew)`;
+        };
+
+        tooltipInfo["galaxy-super_freighter"] = (obj) => {
+            if (!haveTech('banking', 13)) return "";
+            let count = obj.stateOnCount;
+            let total = (((1 + ((count + 1) * 0.08)) / (1 + ((count) * 0.08))) - 1) * 100;
+            let crew = total / 5;
+            return `Next level will increase ${buildings.AlphaExchange.title} storage by +${getNiceNumber(total)}% (+${getNiceNumber(crew)}% per crew)`;
+        };
+
+        tooltipInfo["city-hospital"] = (obj) => {
+            let notes = [];
+            notes.push(`~${getNiceNumber(getHealingRate())} soldiers healed per day`);
+            let growth = 1 / (getGrowthRate() * 4);
+            notes.push(`~${getNiceNumber(growth)} seconds to increase population`);
+            return notes.join("<br>");
+        };
+
+        tooltipInfo["city-boot_camp"] = (obj) => {
+            let notes = [];
+            if (game.global.race['artifical']) {
+                notes.push(`~${getNiceNumber(getHealingRate())} soldiers healed per day`);
+            }
+            notes.push(`~${getNiceNumber(100 / ((game.global.civic.garrison?.rate ?? 0.625) * 4))} seconds to train a soldier`);
+            return notes.join("<br>");
+        };
+
+        tooltipInfo["space-titan_quarters"] = (obj) => {
+            if (!game.global.race['orbit_decayed']) return "";
+            return `~${getNiceNumber(getHealingRate())} soldiers healed per day`;
+        };
+
+        tooltipInfo["portal-carport"] = (obj) => {
+            if (jobs.HellSurveyor.count <= 0) return "";
+            let influx = 5 * (1 + (buildings.BadlandsAttractor.stateOnCount * 0.22));
+            let demons = (influx * 10 + influx * 50) / 2;
+            let divisor = getGovernor() === 'sports' ? 1100 : 1000;
+            divisor *= traitVal('blurry', 0, '+');
+            divisor *= traitVal('instinct', 0, '+');
+            divisor += haveTech('infernite', 5) ? 250 : 0;
+            let danger = demons / divisor;
+            let risk = 10 - Math.min(10, jobs.HellSurveyor.count) / 2;
+            let rate = (danger / 2 * Math.min(1, danger / risk));
+            let wreck = 1 / (rate / 5);
+            return `Up to ~${getNiceNumber(wreck)} seconds to break car (with full supression)`;
+        };
+
+        tooltipInfo["portal-repair_droid"] = (obj) => {
+            let wallRepair = Math.round(200 * (0.95 ** obj.stateOnCount)) / 4;
+            let carRepair = Math.round(180 * (0.92 ** obj.stateOnCount)) / 4;
+            return `${getNiceNumber(wallRepair)} seconds to repair 1% of wall<br>${getNiceNumber(carRepair)} seconds to repair car`;
+        };
+
+        tooltipInfo["portal-attractor"] = (obj) => {
+            let influx = 5 * (1 + (obj.stateOnCount * 0.22));
+            let gem_chance = game.global.stats.achieve.technophobe?.l >= 5 ? 9000 : 10000;
+            if (game.global.race.universe === 'evil' && resources.Dark.currentQuantity > 1) {
+                let de = resources.Dark.currentQuantity * (1 + resources.Harmony.currentQuantity * 0.01);
+                gem_chance -= Math.round(Math.log2(de) * 2);
+            }
+            gem_chance = Math.round(gem_chance * (0.948 ** obj.stateOnCount));
+            gem_chance = Math.round(gem_chance * traitVal('ghostly', 2, '-'));
+            gem_chance = Math.max(12, gem_chance);
+            let drop = (1 / gem_chance) * 100;
+            return `~${getNiceNumber(drop)}% chance to find ${resources.Soul_Gem.title}<br>Up to ~${getNiceNumber(influx*10)}-${getNiceNumber(influx*50)} demons spawned per day`;
+        };
+
+        tooltipInfo["city-smokehouse"] = (obj) => {
+            let spoilage = 50 * (0.9 ** obj.count);
+            return `${getNiceNumber(spoilage)}% of stored ${resources.Food.title} spoiled per second`;
+        };
+
+        tooltipInfo["city-cooling_tower"] = (obj) => {
+            let coolers = buildings.LakeCoolingTower.stateOnCount;
+            let current = 500 * (0.92 ** coolers);
+            let next = 500 * (0.92 ** (coolers+1));
+            let diff = ((current - next) * buildings.LakeHarbor.stateOnCount) * (game.global.race['emfield'] ? 1.5 : 1);
+            return `Next level will decrease total consumption by ${getNiceNumber(diff)} MW`;
+        };
+
+        tooltipInfo["space-shipyard"] = (obj) => {
+            if (!settings.autoFleet || !FleetManagerOuter.nextShipMsg) return "";
+            return FleetManagerOuter.nextShipMsg;
+        };
+
+        tooltipInfo["eden-spirit_battery"] = (obj) => {
+            const batteries = buildings.IsleSpiritBattery.stateOnCount;
+            let coefficient = 0.9;
+            if (game.global.race['warlord'] && buildings.AsphodelCorruptor && game.global.tech?.asphodel >= 13) {
+                const corruptors = buildings.AsphodelCorruptor.on;
+                coefficient = 1 - (1 + (corruptors || 0) * 0.03) / 10;
+            }
+            const current = 18_000 * (coefficient ** batteries);
+            const next = 18_000 * (coefficient ** (batteries + 1));
+            const diff = ((current - next) * buildings.IsleSpiritVacuum.stateOnCount) * (game.global.race['emfield'] ? 1.5 : 1);
+            return `Next level will decrease total consumption by ${getNiceNumber(diff)} MW`;
+        };
+    }
+
+    // Helper function for snippets to add tooltips easily
+    // Uses snippetTooltipInfo (cleared each tick) so removed snippets lose their handlers
+    function addTooltipHandler(building, contentFn) {
+        if (!building || !building._vueBinding) return;
+        const dataId = building._vueBinding;
+        const existingFn = snippetTooltipInfo[dataId];
+
+        if (existingFn) {
+            // Chain with existing handler (multiple snippets can add to same building)
+            snippetTooltipInfo[dataId] = (obj) => {
+                let parts = [];
+                let existing = existingFn(obj);
+                if (existing) parts.push(existing);
+                let newContent = typeof contentFn === 'function' ? contentFn(obj) : contentFn;
+                if (newContent) parts.push(newContent);
+                return parts.join("<br>");
+            };
+        } else {
+            snippetTooltipInfo[dataId] = typeof contentFn === 'function' ? contentFn : () => contentFn;
+        }
+    }
+
+    // Helper for sidebar tooltips (displayed in side panel next to game tooltip)
+    function addSidebarTooltip(building, contentFn) {
+        if (!building || !building._vueBinding) return;
+        snippetTooltipSidebar[building._vueBinding] = contentFn;
+    }
+
     // State variables
     var state = {
         forcedUpdate: false,
@@ -6638,7 +6802,7 @@
             // Otherwise, it ends up attributed to this script itself, which is not ideal and hard to debug.
             // How well it works may depend on browser settings too.
             let fnName = `[Snippet] ${snip.title}`;
-            let executable = `(function(trigger, isEvolving, stopRunning, ui, settings) {
+            let executable = `(function(trigger, isEvolving, stopRunning, ui, settings, addTooltip, addSidebarTooltip, tooltipInfo) {
                 const resourceList = (list) => list;
                 const checkTypesDynamic = checkTypes;
                 const snippetState = {};
@@ -6657,6 +6821,9 @@
                 this.#makeStopRunningFn(snip), // stopRunning() function. Stops running the snippet until its changed or the page is reloaded. Use for one-off script mod snippets.
                 this.#makeUi(snip), // ui object. See below.
                 this.#makeSettingsProxy(snip), // Proxy for "settings". Applies overrides in the right processing stage, even if the snippet runs late.
+                addTooltipHandler, // addTooltip() function. Add custom tooltip content to buildings.
+                addSidebarTooltip, // addSidebarTooltip() function. Add sidebar tooltip content.
+                snippetTooltipInfo, // Direct access to snippet tooltip map (for advanced use).
             ]))[fnName];
             // After all this work, we have a cached function set up in the right scope. Re-use this across invocations.
             this.#evalCache[snippetKey] = fn;
@@ -9110,6 +9277,7 @@ declare global {
             buildingAlwaysClick: false,
             buildingClickPerTick: 50,
             activeTargetsUI: false,
+            tooltipSidebars: true,
             displayPrestigeTypeInTopBar: true,
             displayTotalDaysTypeInTopBar: false,
             scriptSettingsExportFilename: "evolve-script-settings.json",
@@ -15870,6 +16038,8 @@ declare global {
         prioritizeDemandedResources(); // Set res.requestedQuantity, uses queuedTargets and triggerTargets
 
         state.tooltips = {};
+        snippetTooltipInfo = {};      // Clear snippet handlers each tick
+        snippetTooltipSidebar = {};   // Clear sidebar handlers each tick
         state.moneyIncomes.shift();
         for (let i = state.moneyIncomes.length; i < 11; i++) {
             state.moneyIncomes.push(resources.Money.rateOfChange);
@@ -16015,6 +16185,7 @@ declare global {
                 state.missionBuildingList.push(building);
             }
         }
+        initTooltipInfo(); // Initialize built-in tooltip handlers
         for (let project of Object.values(projects)){
             arpaIds[project._vueBinding] = project;
         }
@@ -16093,160 +16264,93 @@ declare global {
         }));
     }
 
+    const tooltipSeparator = '<div style="border-top: solid .0625rem; border-color: inherit"></div>';
+
     function getTooltipInfo(obj) {
-        let notes = [];
-        if (obj === buildings.NeutronCitadel) {
-            let diff = getCitadelConsumption(obj.stateOnCount + 1) - getCitadelConsumption(obj.stateOnCount);
-            notes.push(`Next level will increase total consumption by ${getNiceNumber(diff)} MW`);
-        }
-        if (obj === buildings.SpireMechBay && MechManager.initLab()) {
-            notes.push(`Current team potential: ${getNiceNumber(MechManager.mechsPotential)}`);
-            let supplyCollected = MechManager.activeMechs
-              .filter(mech => mech.size === 'collector')
-              .reduce((sum, mech) => sum + (mech.power * MechManager.collectorValue), 0);
-            if (supplyCollected > 0) {
-                notes.push(`Supplies collected: ${getNiceNumber(supplyCollected)} /s`);
-            }
+        let sections = [];
+        let dataId = obj._vueBinding;
+
+        // Check for script's built-in tooltip handler
+        if (tooltipInfo[dataId]) {
+            let result = tooltipInfo[dataId](obj);
+            if (result) sections.push(result);
         }
 
+        // Check for snippet-added tooltip handler (cleared each tick)
+        if (snippetTooltipInfo[dataId]) {
+            let result = snippetTooltipInfo[dataId](obj);
+            if (result) sections.push(result);
+        }
+
+        // Conflict detection (applies to all buildings/techs)
+        let conflictNotes = [];
         if ((obj instanceof Technology || (!settings.autoARPA && obj._tab === "arpa") || (!settings.autoBuild && obj._tab !== "arpa")) && !state.queuedTargetsAll.includes(obj) && !state.allTriggerlikeTargets.includes(obj)) {
             let conflict = getCostConflict(obj);
             if (conflict) {
-                notes.push(`Conflicts with ${conflict.actionList.map(action => {return `<span class="has-text-info">${action}</span>`;}).join(', ')} for ${conflict.resList.map(res => {return `<span class="has-text-info">${res}</span>`;}).join(', ')} (${conflict.obj.cause})`);
+                conflictNotes.push(`Conflicts with ${conflict.actionList.map(action => `<span class="has-text-info">${action}</span>`).join(', ')} for ${conflict.resList.map(res => `<span class="has-text-info">${res}</span>`).join(', ')} (${conflict.obj.cause})`);
             }
         }
 
+        // Technology-specific logic
         if (obj instanceof Technology) {
             if (state.queuedTargetsAll.includes(obj)) {
-                notes.push("Queued research, processing...");
+                conflictNotes.push("Queued research, processing...");
             } else if (state.allTriggerlikeTargets.includes(obj)) {
-                notes.push("Active trigger, processing...");
+                conflictNotes.push("Active trigger, processing...");
             } else {
                 let conflict = getTechConflict(obj);
                 if (conflict) {
-                    notes.push(conflict);
+                    conflictNotes.push(conflict);
                 }
             }
         }
 
-        if (obj === buildings.GorddonFreighter && haveTech('banking', 13)) {
-            let count = obj.stateOnCount;
-            let total = (((1 + ((count + 1) * 0.03)) / (1 + ((count) * 0.03))) - 1) * 100;
-            let crew = total / 3;
-            notes.push(`Next level will increase ${buildings.AlphaExchange.title} storage by +${getNiceNumber(total)}% (+${getNiceNumber(crew)}% per crew)`);
-        }
-        if (obj === buildings.Alien1SuperFreighter && haveTech('banking', 13)) {
-            let count = obj.stateOnCount;
-            let total = (((1 + ((count + 1) * 0.08)) / (1 + ((count) * 0.08))) - 1) * 100;
-            let crew = total / 5;
-            notes.push(`Next level will increase ${buildings.AlphaExchange.title} storage by +${getNiceNumber(total)}% (+${getNiceNumber(crew)}% per crew)`);
-        }
-        if (obj === buildings.Hospital
-            || (obj === buildings.BootCamp && game.global.race['artifical'])
-            || (obj === buildings.EnceladusBase && game.global.race['orbit_decayed'])) {
-            notes.push(`~${getNiceNumber(getHealingRate())} soldiers healed per day`);
-        }
-        if (obj === buildings.BootCamp) {
-            notes.push(`~${getNiceNumber(100 / ((game.global.civic.garrison?.rate ?? 0.625) * 4))} seconds to train a soldier`);
-        }
-        if (obj === buildings.Hospital) {
-            let growth = 1 / (getGrowthRate() * 4); // Fast loop, 4 times per second
-            notes.push(`~${getNiceNumber(growth)} seconds to increase population`);
-        }
-        if (obj === buildings.PortalCarport && jobs.HellSurveyor.count > 0) {
-            let influx = 5 * (1 + (buildings.BadlandsAttractor.stateOnCount * 0.22));
-            let demons = (influx * 10 + influx * 50) / 2;
-            let divisor = getGovernor() === 'sports' ? 1100 : 1000;
-            divisor *= traitVal('blurry', 0, '+');
-            divisor *= traitVal('instinct', 0, '+');
-            divisor += haveTech('infernite', 5) ? 250 : 0;
-            let danger = demons / divisor;
-            let risk = 10 - Math.min(10, jobs.HellSurveyor.count) / 2;
-            let rate = (danger / 2 * Math.min(1, danger / risk));
-            let wreck = 1 / (rate / 5); // Long loop, once per 5 seconds
-            notes.push(`Up to ~${getNiceNumber(wreck)} seconds to break car (with full supression)`);
-        }
-        if (obj === buildings.PortalRepairDroid) {
-            let wallRepair = Math.round(200 * (0.95 ** obj.stateOnCount)) / 4;
-            let carRepair = Math.round(180 * (0.92 ** obj.stateOnCount)) / 4;
-            notes.push(`${getNiceNumber(wallRepair)} seconds to repair 1% of wall`);
-            notes.push(`${getNiceNumber(carRepair)} seconds to repair car`);
-        }
-        if (obj === buildings.BadlandsAttractor) {
-            let influx = 5 * (1 + (obj.stateOnCount * 0.22));
-            let gem_chance = game.global.stats.achieve.technophobe?.l >= 5 ? 9000 : 10000;
-            if (game.global.race.universe === 'evil' && resources.Dark.currentQuantity > 1) {
-                let de = resources.Dark.currentQuantity * (1 + resources.Harmony.currentQuantity * 0.01);
-                gem_chance -= Math.round(Math.log2(de) * 2);
-            }
-            gem_chance = Math.round(gem_chance * (0.948 ** obj.stateOnCount));
-            gem_chance = Math.round(gem_chance * traitVal('ghostly', 2, '-'));
-            gem_chance = Math.max(12, gem_chance);
-            let drop = (1 / gem_chance) * 100;
-            notes.push(`~${getNiceNumber(drop)}% chance to find ${resources.Soul_Gem.title}`);
-            notes.push(`Up to ~${getNiceNumber(influx*10)}-${getNiceNumber(influx*50)} demons spawned per day`);
-        }
-        if (obj === buildings.Smokehouse) {
-            let spoilage = 50 * (0.9 ** obj.count);
-            notes.push(`${getNiceNumber(spoilage)}% of stored ${resources.Food.title} spoiled per second`);
-        }
-        if (obj === buildings.LakeCoolingTower) {
-            let coolers = buildings.LakeCoolingTower.stateOnCount;
-            let current = 500 * (0.92 ** coolers);
-            let next = 500 * (0.92 ** (coolers+1));
-            let diff = ((current - next) * buildings.LakeHarbor.stateOnCount) * (game.global.race['emfield'] ? 1.5 : 1);
-            notes.push(`Next level will decrease total consumption by ${getNiceNumber(diff)} MW`);
-        }
-        if (obj === buildings.DwarfShipyard) {
-            if (settings.autoFleet && FleetManagerOuter.nextShipMsg) {
-                notes.push(FleetManagerOuter.nextShipMsg);
-            }
-        }
-        if (obj === buildings.IsleSpiritBattery) {
-            // Pulled from game's edenic.js in v1.4.8
-            const batteries = buildings.IsleSpiritBattery.stateOnCount;
-            let coefficient = 0.9;
-
-            if (game.global.race['warlord'] && buildings.AsphodelCorruptor && game.global.tech?.asphodel >= 13) {
-                const corruptors = buildings.AsphodelCorruptor.on;
-                coefficient = 1 - (1 + (corruptors || 0) * 0.03) / 10;
-            }
-
-            const current = 18_000 * (coefficient ** batteries);
-            const next = 18_000 * (coefficient ** (batteries + 1));
-            const diff = ((current - next) * buildings.IsleSpiritVacuum.stateOnCount) * (game.global.race['emfield'] ? 1.5 : 1);
-            notes.push(`Next level will decrease total consumption by ${getNiceNumber(diff)} MW`);
-        }
-
+        // Existing extraDescription support
         if (obj.extraDescription) {
-            notes.push(obj.extraDescription);
+            conflictNotes.push(obj.extraDescription);
         }
-        return notes.join("<br>");
+
+        if (conflictNotes.length > 0) {
+            sections.push(conflictNotes.join("<br>"));
+        }
+
+        return sections.join(tooltipSeparator);
     }
 
     function tooltipObserverCallback(mutations) {
         if (!settings.masterScriptToggle) {
             return;
         }
-        mutations.forEach(mutation => mutation.addedNodes.forEach(node => {
-            if (node.id === "popper") {
-                let popperObserver = new MutationObserver((popperMutations) => {
-                    // Add tooltips once again when popper cleared
-                    if (!node.querySelector(".script-tooltip")) {
-                        popperObserver.disconnect();
-                        addTooltip(node);
-                        popperObserver.observe(node, {childList: true});
-                    }
-                })
-                addTooltip(node);
-                popperObserver.observe(node, {childList: true});
-            }
-        }));
+        mutations.forEach(mutation => {
+            // Hide sidebar when popper is removed
+            mutation.removedNodes.forEach(node => {
+                if (node.id === "popper") {
+                    hideSidebarPanel();
+                }
+            });
+            // Add tooltips when popper appears
+            mutation.addedNodes.forEach(node => {
+                if (node.id === "popper") {
+                    let popperObserver = new MutationObserver((popperMutations) => {
+                        // Add tooltips once again when popper cleared
+                        if (!node.querySelector(".script-tooltip")) {
+                            popperObserver.disconnect();
+                            hideSidebarPanel();
+                            addTooltip(node);
+                            popperObserver.observe(node, {childList: true});
+                        }
+                    })
+                    addTooltip(node);
+                    popperObserver.observe(node, {childList: true});
+                }
+            });
+        });
     }
 
     const infusionStep = {"blood-lust": 15, "blood-illuminate": 12, "blood-greed": 16, "blood-hoarder": 14, "blood-artisan": 8, "blood-attract": 4, "blood-wrath": 2};
     function addTooltip(node) {
         $(node).append(`<span class="script-tooltip" hidden></span>`);
+
         let dataId = node.dataset.id;
         // Tooltips for things with no script objects
         if (dataId === 'powerStatus') {
@@ -16256,7 +16360,7 @@ declare global {
             $(node).find('.costList .res-Blood_Stone').append(` (+${infusionStep[dataId]})`);
             return;
         } else if (state.tooltips[dataId]) {
-            $(node).append(`<div style="border-top: solid .0625rem #999">${state.tooltips[dataId]}</div>`);
+            $(node).append(`<div style="border-top: solid .0625rem; border-color: inherit">${state.tooltips[dataId]}</div>`);
             return;
         }
 
@@ -16292,8 +16396,94 @@ declare global {
         }
 
         let description = getTooltipInfo(obj);
+
         if (description) {
-            $(node).append(`<div style="border-top: solid .0625rem #999">${description}</div>`);
+            $(node).append(`<div style="border-top: solid .0625rem; border-color: inherit">${description}</div>`);
+        }
+
+        // Check for snippet sidebar content (cleared each tick)
+        let sidebarContent = snippetTooltipSidebar[obj._vueBinding];
+        if (sidebarContent) {
+            let sidebarResult = typeof sidebarContent === 'function' ? sidebarContent(obj) : sidebarContent;
+            if (sidebarResult) {
+                showSidebarPanel(node, sidebarResult);
+            } else {
+                hideSidebarPanel();
+            }
+        } else {
+            hideSidebarPanel();
+        }
+    }
+
+    function showSidebarPanel(popperNode, content) {
+        if (!settings.tooltipSidebars) {
+            return;
+        }
+        // Create sidebar panel if it doesn't exist
+        let panel = document.getElementById(SIDEBAR_PANEL_ID);
+        if (!panel) {
+            panel = document.createElement('div');
+            panel.id = SIDEBAR_PANEL_ID;
+            panel.style.position = 'fixed';
+            panel.style.zIndex = '100001';
+            panel.style.pointerEvents = 'none';
+            panel.style.textAlign = 'center';
+            panel.style.maxWidth = '350px';
+            document.body.appendChild(panel);
+        }
+
+        // Copy styles from game's tooltip to match current theme
+        const popperStyles = getComputedStyle(popperNode);
+        panel.style.backgroundColor = popperStyles.backgroundColor;
+        panel.style.border = popperStyles.border;
+        panel.style.borderRadius = popperStyles.borderRadius;
+        panel.style.padding = popperStyles.padding;
+        panel.style.color = popperStyles.color;
+        panel.style.fontFamily = popperStyles.fontFamily;
+        panel.style.fontSize = popperStyles.fontSize;
+
+        // Set content
+        panel.innerHTML = content;
+        panel.style.visibility = 'hidden';
+        panel.style.display = 'block';
+
+        // Wait for game's Popper.js to finish positioning, then position our sidebar
+        requestAnimationFrame(() => {
+            // Get fresh reference to popper in case it moved
+            const popper = document.getElementById('popper');
+            if (!popper) {
+                panel.style.display = 'none';
+                return;
+            }
+
+            const popperRect = popper.getBoundingClientRect();
+            const panelRect = panel.getBoundingClientRect();
+            const panelWidth = panelRect.width;
+            const spaceOnRight = window.innerWidth - popperRect.right - 16;
+
+            let left, top;
+            if (spaceOnRight >= panelWidth) {
+                left = popperRect.right + 8;
+            } else {
+                left = popperRect.left - panelWidth - 8;
+            }
+
+            top = popperRect.top;
+
+            // Keep within viewport bounds
+            left = Math.max(8, Math.min(left, window.innerWidth - panelWidth - 8));
+            top = Math.max(8, Math.min(top, window.innerHeight - panelRect.height - 8));
+
+            panel.style.left = left + 'px';
+            panel.style.top = top + 'px';
+            panel.style.visibility = 'visible';
+        });
+    }
+
+    function hideSidebarPanel() {
+        let panel = document.getElementById(SIDEBAR_PANEL_ID);
+        if (panel) {
+            panel.style.display = 'none';
         }
     }
 
@@ -18518,6 +18708,7 @@ declare global {
 
         addSettingsHeader1(currentNode, "Additional UI");
         addSettingsToggle(currentNode, "activeTargetsUI", "Display detailed queue", "Add UI in right column to display currently active queued buildings, technologies, and triggers and their resources.", buildActiveTargetsUI, removeActiveTargetsUI);
+        addSettingsToggle(currentNode, "tooltipSidebars", "Display tooltip sidebars", "Show sidebar panels next to game tooltips with additional information from snippets");
         addSettingsToggle(currentNode, "displayPrestigeTypeInTopBar", "Display prestige type in top bar", "Show the currently selected prestige type in the top bar", updatePrestigeInTopBar, updatePrestigeInTopBar);
         addSettingsToggle(currentNode, "displayTotalDaysTypeInTopBar", "Display total days in top bar", "Show the total days next to this year's days", updateTotalDaysInTopBar, updateTotalDaysInTopBar);
 
