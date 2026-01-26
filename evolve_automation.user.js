@@ -2253,6 +2253,7 @@
 
     // Lookup tables, will be filled on init
     var techIds = {};
+    var techs = {};
     var buildingIds = {};
     var arpaIds = {};
     var jobIds = {};
@@ -7436,6 +7437,10 @@ declare global {
     /** ARPA project objects. */
     const projects: {
         ${Object.keys(projects).reduce((acc, pn) => acc + "/** " + projects[pn].title + " */ " + pn + ": Project;\n", '')}
+    };
+    /** Technology objects with friendly names (e.g., techs.MadScience instead of techIds['tech-mad_science']). */
+    const techs: {
+        ${Object.keys(techs).reduce((acc, tn) => acc + "/** " + techs[tn].title + " (ID: " + techs[tn]._id + ") */ " + tn + ": Technology;\n        ", "")}
     };
     /** Access buildings by game ID. */
     type BuildingIdKey = ${Object.keys(buildingIds).map(k => "'" + k + "'").join('|')};
@@ -16227,10 +16232,17 @@ declare global {
         }
     }
 
+    // Convert internal ID to PascalCase friendly name (e.g., "tech-mad_science" → "MadScience")
+    function techIdToFriendlyName(id) {
+        return id.replace(/^tech-/, '').split(/[-_]/).map(word => word.charAt(0).toUpperCase() + word.slice(1)).join('');
+    }
+
     function initialiseScript() {
         // Init objects and lookup tables
         for (let [key, action] of Object.entries(game.actions.tech)) {
-            techIds[action.id] = new Technology(key);
+            let tech = new Technology(key);
+            techIds[action.id] = tech;
+            techs[techIdToFriendlyName(action.id)] = tech;
         }
         for (let building of Object.values(buildings)){
             buildingIds[building._vueBinding] = building;
