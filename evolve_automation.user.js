@@ -3727,6 +3727,24 @@
           () => "Gate demons fully supressed",
           () => settings.buildingWeightingGateTurret
       ],[
+          // Stop building gun emplacements once soul forge needs 0 soldiers
+          () => buildings.PitSoulForge.count > 0 && buildings.PitGunEmplacement.isUnlocked(),
+          (building) => {
+              if (building === buildings.PitGunEmplacement) {
+                  let soldierRating = game.armyRating ? game.armyRating(1, 'hellArmy') : 1;
+                  if (soldierRating <= 0) return false;
+                  let base = game.global.race['warlord'] ? 400 : 650;
+                  let soulForgeSoldiers = Math.ceil(base / soldierRating);
+                  // Calculate soldiers saved by current gun emplacements
+                  let soldiersPerGun = game.global.tech.hell_gun >= 2 ? 2 : 1;
+                  soldiersPerGun *= traitVal('high_pop', 0, 1);
+                  soulForgeSoldiers -= buildings.PitGunEmplacement.stateOnCount * soldiersPerGun;
+                  return soulForgeSoldiers <= 0;
+              }
+          },
+          () => "Soul Forge needs 0 soldiers",
+          () => 0
+      ],[
           () => (resources.Containers.isUnlocked() || resources.Crates.isUnlocked()) && resources.Containers.storageRatio === 1 && resources.Crates.storageRatio === 1,
           (building) => building === buildings.Shed || building === buildings.RedGarage || building === buildings.AlphaWarehouse || building === buildings.ProximaCargoYard || building === buildings.TitanStorehouse,
           () => "Need more storage",
