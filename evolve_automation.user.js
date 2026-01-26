@@ -6076,10 +6076,11 @@
         },
 
         getWeaponMod(mech) {
-            let weapons = poly.monsters[game.global.portal.spire.boss].weapon;
+            let boss = game.global.portal.spire.boss;
             let rating = 0;
             for (let i = 0; i < mech.hardpoint.length; i++){
-                rating += poly.weaponPower(mech, weapons[mech.hardpoint[i]]);
+                let effect = poly.checkBossResist(boss, mech.hardpoint[i]);
+                rating += poly.weaponPower(mech, effect);
             }
             return rating;
         },
@@ -6206,9 +6207,9 @@
 
         updateBestWeapon() {
             let bestMod = 0;
-            let list = poly.monsters[game.global.portal.spire.boss].weapon;
+            let boss = game.global.portal.spire.boss;
             for (let weapon of MechManager.Weapon) {
-                let mod = list[weapon];
+                let mod = poly.checkBossResist(boss, weapon);
                 if (mod > bestMod) {
                     bestMod = mod;
                     this.bestWeapon = [weapon];
@@ -23158,6 +23159,10 @@ declare global {
         terrainRating: function(e,i,s,x){return!e.equip.includes("special")||"small"!==e.size&&"medium"!==e.size&&"collector"!==e.size||i<1&&(i+=(1-i)*(s.includes("gravity")?.1:.2)),"small"!==e.size&&i<1&&(i+=(s.includes("fog")||s.includes("dark")?.005:.01)*(x??game.global.portal.mechbay.scouts))>1&&(i=1),i},
         // function weaponPower(mech,power) from portal.js
         weaponPower: function(e,i){return i<1&&0!==i&&e.equip.includes("special")&&"titan"===e.size&&(i+=.25*(1-i)),!e.equip.includes("special")||"large"!==e.size&&"cyberdemon"!==e.size||(i*=1.02),i},
+        // Seeded random matching game's algorithm (linear congruential generator)
+        seededRandom: function(min,max,seed){let s=(seed*9301+49297)%233280;return min+(s/233280)*(max-min)},
+        // function checkBossResist(boss,weapon) from portal.js
+        checkBossResist: function(boss,weapon){let effectiveness=poly.monsters[boss].weapon[weapon];let seed=game.global.stats.reset+(game.global.portal?.spire?.count||1);let seed_r1=Math.floor(poly.seededRandom(0,25000,seed+(game.global.portal?.spire?.count||1)*2));let seed_w1=Math.floor(poly.seededRandom(0,25000,seed+game.global.stats.reset*2));let weaponList=game.global.race['warlord']?['laser','kinetic','shotgun','missile','flame','plasma','sonic','tesla','claws','venom','cold','shock','fire','acid','stone','iron','flesh','ice','magma','axe','hammer']:['laser','kinetic','shotgun','missile','flame','plasma','sonic','tesla'];let resist=weaponList[Math.floor(poly.seededRandom(0,weaponList.length,seed_r1))];let weak=weaponList[Math.floor(poly.seededRandom(0,weaponList.length,seed_w1))];if(weapon===resist){let seed_r2=Math.floor(poly.seededRandom(0,25000,seed_r1+(game.global.portal?.spire?.count||1)*3));effectiveness-=Math.floor(poly.seededRandom(0,26,seed_r2))/100;if(effectiveness<0){effectiveness=0}}else if(weapon===weak){let seed_w2=Math.floor(poly.seededRandom(0,25000,seed_w1+game.global.stats.reset*3));effectiveness+=Math.floor(poly.seededRandom(0,26,seed_w2))/100}return effectiveness},
         // export function timeFormat(time) from functions.js
         timeFormat: function(e){let i;if(e<0)i=game.loc("time_never");else if((e=+e.toFixed(0))>60){let l=e%60,s=(e-l)/60;if(s>=60){let e=s%60,l=(s-e)/60;if(l>24){i=`${(l-(e=l%24))/24}d ${e}h`}else i=`${l}h ${e=("0"+e).slice(-2)}m`}else i=`${s=("0"+s).slice(-2)}m ${l=("0"+l).slice(-2)}s`}else i=`${e=("0"+e).slice(-2)}s`;return i},
         // export universeAffix(universe) from achieve.js
