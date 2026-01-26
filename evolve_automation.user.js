@@ -2373,7 +2373,9 @@
 
             // Calculate what next drone adds: baseProduction * droneRate
             const addedProduction = baseProduction * droneRate;
-            const nextDroneCost = Math.round(100 * Math.pow(1.25, sensorsBuilt));
+            // Get actual Infernite cost from game (includes all cost reduction bonuses)
+            const adjustedCosts = poly.adjustCosts(obj.definition);
+            const nextDroneCost = adjustedCosts.Infernite ? adjustedCosts.Infernite(0) : 0;
             const paybackSeconds = addedProduction > 0 ? nextDroneCost / addedProduction : Infinity;
             const paybackMinutes = paybackSeconds / 60;
             let paybackStr;
