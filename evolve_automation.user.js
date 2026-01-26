@@ -16,7 +16,6 @@
 // @grant        none
 // @require      https://code.jquery.com/jquery-3.7.1.min.js
 // @require      https://code.jquery.com/ui/1.12.1/jquery-ui.min.js
-// @require      https://kewne7768.github.io/monaco-export/monaco-export.js?0.53.0
 // ==/UserScript==
 //
 // This script forked from TMVictor's script version 3.3.1. Original script: https://gist.github.com/TMVictor/3f24e27a21215414ddc68842057482da
@@ -7053,6 +7052,21 @@
         static _currentlyEditingMonaco = null;
 
         static _unloadEventRegistered = false;
+
+        // Preload Monaco in the background after game is loaded
+        static preloadMonaco() {
+            if (this._initiatedMonacoLoad) return;
+            const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 1000));
+            idle(() => {
+                if (this._initiatedMonacoLoad) return;
+                this._initiatedMonacoLoad = true;
+                const monacoUrl = "https://kewne7768.github.io/monaco-export/monaco-export.js";
+                let el = document.createElement("script");
+                el.src = monacoUrl;
+                // No error alert for preload - will show error when user tries to open editor
+                document.body.appendChild(el);
+            });
+        }
 
         // We need another layer of wrapper around monaco-export's callback, because we may or may not have to load it in dynamically
         // based on how the user loads the userscript.
@@ -16991,6 +17005,7 @@ declare global {
         initialiseScript();
         updateOverrides();
         SnippetManager.prepSnippets();
+        SnippetEditorManager.preloadMonaco();
 
         // Purposefully checks raw as prestigeDBenabled doesn't support overrides.
         if (settingsRaw.prestigeDBenabled) { PrestigeDBManager.init(); }
