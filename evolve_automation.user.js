@@ -1843,7 +1843,10 @@
                 case "eldritch":
                     return game.global.stats.achieve['nightmare']?.mg ? 1 : 0;
                 case "hybrid":
-                    return game.global.stats.achieve['godslayer'] ? 1 : 0;
+                    // Check godslayer achievement AND that at least one component genus is available
+                    if (!game.global.stats.achieve['godslayer']) return 0;
+                    let hybridGenera = game.races[this.id]?.hybrid ?? [];
+                    return hybridGenera.some(isGenusAvailable) ? 1 : 0;
                 case undefined: // Nonexistent custom
                     return 0;
                 default:
@@ -10411,8 +10414,13 @@ declare global {
         let maxRNA = 0;
         let maxDNA = 0;
 
-        let evolutionTree = state.evolutionTarget.evolutionTree[settings.userEvolutionGenus] ??
-                            state.evolutionTarget.evolutionTree[Object.keys(state.evolutionTarget.evolutionTree)[0]];
+        // Select evolution path - prefer user setting, fall back to first available path
+        let evolutionTree = state.evolutionTarget.evolutionTree[settings.userEvolutionGenus];
+        if (!evolutionTree) {
+            // For hybrid races, find a genus path that's actually available
+            let availableGenus = Object.keys(state.evolutionTarget.evolutionTree).find(isGenusAvailable);
+            evolutionTree = state.evolutionTarget.evolutionTree[availableGenus ?? Object.keys(state.evolutionTarget.evolutionTree)[0]];
+        }
 
         for (let i = 0; i < evolutionTree.length; i++) {
             let evolution = evolutionTree[i];
@@ -22929,6 +22937,21 @@ declare global {
 
     function isLumberRace() {
         return !game.global.race['kindling_kindred'] && !game.global.race['smoldering'];
+    }
+
+    function isGenusAvailable(genus) {
+        switch (genus) {
+            case "synthetic": return game.global.stats.achieve['obsolete']?.l >= 5;
+            case "eldritch": return game.global.stats.achieve['nightmare']?.mg;
+            case "demonic": return game.global.city.biome === 'hellscape' || game.global.blood.unbound >= 3;
+            case "angelic": return game.global.city.biome === 'eden' || game.global.blood.unbound >= 3;
+            case "aquatic": return ['swamp','oceanic'].includes(game.global.city.biome) || game.global.blood.unbound >= 1;
+            case "fey": return ['forest','swamp','taiga'].includes(game.global.city.biome) || game.global.blood.unbound >= 1;
+            case "sand": return ['ashland','desert'].includes(game.global.city.biome) || game.global.blood.unbound >= 1;
+            case "heat": return ['ashland','volcanic'].includes(game.global.city.biome) || game.global.blood.unbound >= 1;
+            case "polar": return ['tundra','taiga'].includes(game.global.city.biome) || game.global.blood.unbound >= 1;
+            default: return true; // Base genera are always available
+        }
     }
 
     function getOccCosts() {
