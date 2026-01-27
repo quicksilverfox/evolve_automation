@@ -10001,6 +10001,7 @@ declare global {
             autoMech: false,
             mechScrap: "mixed",
             mechScrapEfficiency: 1.5,
+            mechProtectPatrol: true,
             mechCollectorValue: 0.5,
             mechBuild: "random",
             mechSize: "titan",
@@ -15299,8 +15300,21 @@ declare global {
               lastFloor ? Math.min(settings.mechScrapEfficiency, 1) :
               settings.mechScrapEfficiency;
 
+            // Protect mechs on Eden patrol duty
+            let patrolMechs = settings.mechProtectPatrol && game.global.eden?.mech_station?.count >= 10 ? (game.global.eden.mech_station.mechs ?? 0) : 0;
+            // Resolve preferred size from setting (handles auto/gems/supply options)
+            let preferredSize = settings.mechSize === "auto" ? m.bestSize[0] :
+                                settings.mechSize === "gems" ? m.bestGems[0] :
+                                settings.mechSize === "supply" ? m.bestSupply[0] :
+                                settings.mechSize;
+
             let badMechList = m.activeMechs.filter(mech => {
                 if ((mech.infernal && mech.size !== 'collector') || mech.power >= m.bestMech[mech.size].power) {
+                    return false;
+                }
+                // Protect mechs assigned to Eden patrol (oldest mechs by index)
+                // Only protect mechs of preferred size - gap-fillers can be scrapped
+                if (mech.id < patrolMechs && mech.size === preferredSize) {
                     return false;
                 }
                 if (forceBuild) { // Get everything that isn't infernal or 100% optimal for force rebuild
@@ -19971,6 +19985,7 @@ declare global {
                             {val: "mixed", label: "Excess inefficient", hint: "Scrap as much inefficient mechs as possible, trying to preserve just enough of old mechs to fill bay to max by the time when next floor will be reached, calculating threshold based on progress speed and resources incomes"}];
         addSettingsSelect(currentNode, "mechScrap", "Scrap mechs", "Configures what will be scrapped. Infernal mechs won't ever be scrapped.", scrapOptions);
         addSettingsNumber(currentNode, "mechScrapEfficiency", "Scrap efficiency", "Scrap mechs only when '((OldMechRefund / NewMechCost) / (OldMechDamage / NewMechDamage))' more than given number.&#xA;For the cases when exchanged mechs have same size(1/3 refund) it means that with 1 eff. script allowed to scrap mechs under 33.3%. 1.5 eff. - under 22.2%, 2 eff. - under 16.6%, 0.5 eff. - under 66.6%, 0 eff. - under 100%, etc.&#xA;Efficiency below '1' is not recommended, unless scrap set to 'Full bay', as it's a breakpoint when refunded resources can immidiately compensate lost damage, resulting with best damage growth rate.&#xA;Efficiency above '1' is useful to save resources for more desperate times, or to compensate low soul gems income.");
+        addSettingsToggle(currentNode, "mechProtectPatrol", "Protect Eden patrol mechs", "Prevents scrapping mechs that are assigned to Eden Mech Station patrol. Gap-fillers and other that don't match the preferred mech size can still be scrapped.");
         addSettingsNumber(currentNode, "mechCollectorValue", "Collector value", "Collectors can't be directly compared with combat mechs, having no firepower. Script will assume that one collector/size is equal to this amount of scout/size. If you feel that script is too reluctant to scrap old collectors - you can decrease this value. Or increase, to make them more persistant. 1 value - 50% collector equial to 50% scout, 0.5 value - 50% collector equial to 25% scout, 2 value - 50% collector equial to 100% scout, etc.");
 
         let buildOptions = [{val: "none", label: "None", hint: "Nothing will be build automatically"},
