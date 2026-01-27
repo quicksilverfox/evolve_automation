@@ -847,9 +847,23 @@
         get settingId() { return this._vueBinding; }
 
         get autoBuildEnabled() { return settings['bat' + this._vueBinding] }
+        set autoBuildEnabled(val) { settings['bat' + this._vueBinding] = val }
+
         get autoStateEnabled() { return settings['bld_s_' + this._vueBinding] }
+        set autoStateEnabled(val) { settings['bld_s_' + this._vueBinding] = val }
+
         get autoStateSmart() { return settings['bld_s2_' + this._vueBinding] }
+        set autoStateSmart(val) { settings['bld_s2_' + this._vueBinding] = val }
+
         get priority() { return settingsRaw['bld_p_' + this._vueBinding] }
+        set priority(val) { settings['bld_p_' + this._vueBinding] = val }
+
+        get weighting() { return settings['bld_w_' + this._vueBinding] }
+        set weighting(val) { settings['bld_w_' + this._vueBinding] = val }
+
+        get maxBuild() { return settings['bld_m_' + this._vueBinding] }
+        set maxBuild(val) { settings['bld_m_' + this._vueBinding] = val }
+
         get _weighting() { return settings['bld_w_' + this._vueBinding] }
         get _autoMax() { return settings['bld_m_' + this._vueBinding] }
 
@@ -1478,6 +1492,19 @@
 
         get id() {
             return this._id;
+        }
+
+        get ignored() {
+            return settings.researchIgnore.includes(this._vueBinding);
+        }
+
+        set ignored(val) {
+            let index = settings.researchIgnore.indexOf(this._vueBinding);
+            if (val && index === -1) {
+                settings.researchIgnore.push(this._vueBinding);
+            } else if (!val && index !== -1) {
+                settings.researchIgnore.splice(index, 1);
+            }
         }
 
         isUnlocked() {
@@ -7322,6 +7349,20 @@ declare global {
         /** Cost for next one */
         cost: ResourceList;
 
+        // Settings (read/write)
+        /** Whether autoBuild is enabled for this building. */
+        autoBuildEnabled: boolean;
+        /** Whether auto power state management is enabled. */
+        autoStateEnabled: boolean;
+        /** Whether smart power state management is enabled. */
+        autoStateSmart: boolean;
+        /** Build priority (-1 to 100+). -1 means "same as highest", 0 means "only when prioritized". */
+        priority: number;
+        /** Build weighting multiplier. */
+        weighting: number;
+        /** Max build count (-1 for unlimited, 0 to disable). */
+        maxBuild: number;
+
         /** Many more properties and methods exist and aren't yet documented. */
         [key: string]: any;
     }
@@ -7354,6 +7395,9 @@ declare global {
 
         id: string;
         title: string;
+
+        /** Whether this tech is in the ignore list (won't be auto-researched). */
+        ignored: boolean;
     }
 
     /** Representation of a resource. */
