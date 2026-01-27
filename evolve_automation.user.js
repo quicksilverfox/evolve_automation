@@ -13971,8 +13971,15 @@ declare global {
                             canReduce = poly.hellSupression("gate", currentStateOn - 1).supress >= 1;
                         }
                         if (!dominated) {
-                            // Under 100%, increase by 1
-                            maxStateOn = Math.min(maxStateOn, currentStateOn + 1);
+                            // Under 100%, increase by 1 if we have enough soldiers in hell garrison
+                            // hellGarrison accounts for patrols and reserved soldiers (including guard post buffer)
+                            // If negative, we're overextended and shouldn't enable more posts (prevents oscillation)
+                            if (WarManager.hellGarrison >= 0) {
+                                maxStateOn = Math.min(maxStateOn, currentStateOn + 1);
+                            } else {
+                                // Not enough soldiers, maintain current state
+                                maxStateOn = Math.min(maxStateOn, currentStateOn);
+                            }
                         } else if (canReduce) {
                             // Can safely reduce by 1 and still maintain 100%
                             maxStateOn = Math.min(maxStateOn, currentStateOn - 1);
