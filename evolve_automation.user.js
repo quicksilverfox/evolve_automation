@@ -7455,6 +7455,11 @@ declare global {
     class Technology {
         /** Whether the tech is currently available for research. Doesn't include Precognition or check for required knowledge. Returns false if already researched. */
         isUnlocked(): boolean;
+        /**
+         * Without max: Returns true if it's currently possible to research the tech.
+         * With max: Returns true if there's enough storage (tech font is not red).
+         */
+        isAffordable(max?: boolean): boolean;
         /** Whether isUnlocked() and currently affordable (button is lit up to click). */
         isClickable(): boolean;
         /** Whether already researched or not. Note: the game doesn't differentiate between some forking techs correctly. */
