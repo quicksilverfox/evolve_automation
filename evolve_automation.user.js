@@ -7001,10 +7001,18 @@
             // trigger() but only if affordable (and optionally resource cost is below maxCost).
             // Examples:
             //   trigger.toCost(buildings.House) - builds houses while affordable
+            //   trigger.toCost(buildings.House, 10) - builds up to 10 houses while affordable
             //   trigger.toCost(buildings.House, resources.Money) - builds houses while Money cost < storage cap
             //   trigger.toCost(buildings.House, resources.Money, 500) - builds houses while Money cost < 500
+            //   trigger.toCost(buildings.House, resources.Money, 500, 10) - builds up to 10 houses while Money cost < 500
             //   trigger.toCost(techs.club) - researches club while affordable
-            fn.toCost = (triggerable, resource, maxCost, limit = 1000000) => {
+            fn.toCost = (triggerable, resourceOrLimit, maxCost, limit = 1000000) => {
+                // Overload: trigger.toCost(action, limit) - second param is number
+                let resource = resourceOrLimit;
+                if (typeof resourceOrLimit === 'number') {
+                    limit = resourceOrLimit;
+                    resource = undefined;
+                }
                 if (triggerable instanceof Technology) {
                     if (!triggerable.isUnlocked() || !triggerable.isAffordable(true)) {
                         return false;
@@ -7333,13 +7341,17 @@ declare global {
          * Checks isUnlocked() and isAffordable(true) before triggering.
          * For Actions, also checks count < limit.
          * @param target - The building, ARPA, or technology to trigger
-         * @param resource - Optional Resource to check cost for (e.g., resources.Money)
+         * @param resourceOrLimit - Optional Resource to check cost for, or a number as max build count
          * @param maxCost - Optional max cost threshold (default: resource storage cap)
          * @param limit - Optional max build count for Actions (default: 1000000, ignored for Technology)
          * @returns true if triggered, false otherwise
          * @example Build houses while affordable
          * \`\`\`
          * trigger.toCost(buildings.House);
+         * \`\`\`
+         * @example Build up to 10 houses while affordable
+         * \`\`\`
+         * trigger.toCost(buildings.House, 10);
          * \`\`\`
          * @example Build houses while Money cost < storage cap
          * \`\`\`
@@ -7349,11 +7361,16 @@ declare global {
          * \`\`\`
          * trigger.toCost(buildings.House, resources.Money, 500);
          * \`\`\`
+         * @example Build up to 10 houses while Money cost < 500
+         * \`\`\`
+         * trigger.toCost(buildings.House, resources.Money, 500, 10);
+         * \`\`\`
          * @example Research club while affordable
          * \`\`\`
          * trigger.toCost(techs.club);
          * \`\`\`
          */
+        toCost(target: Action | Technology, limit: number): boolean;
         toCost(target: Action | Technology, resource?: Resource, maxCost?: number, limit?: number): boolean;
 
         /**
