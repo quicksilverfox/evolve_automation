@@ -6968,14 +6968,20 @@
             //   trigger.toCost(buildings.House) - builds houses while affordable
             //   trigger.toCost(buildings.House, resources.Money) - builds houses while Money cost < storage cap
             //   trigger.toCost(buildings.House, resources.Money, 500) - builds houses while Money cost < 500
+            //   trigger.toCost(techs.club) - researches club while affordable
             fn.toCost = (triggerable, resource, maxCost, limit = 1000000) => {
-                if (!(triggerable instanceof Action)) {
-                    throw new Error(`Invalid action passed to trigger.toCost(). Expected Action, got ${typeof triggerable}.`);
-                }
-                if (!triggerable.isUnlocked() ||
-                    !triggerable.isAffordable(true) ||
-                    triggerable.count >= limit) {
-                    return false;
+                if (triggerable instanceof Technology) {
+                    if (!triggerable.isUnlocked() || !triggerable.isAffordable(true)) {
+                        return false;
+                    }
+                } else if (triggerable instanceof Action) {
+                    if (!triggerable.isUnlocked() ||
+                        !triggerable.isAffordable(true) ||
+                        triggerable.count >= limit) {
+                        return false;
+                    }
+                } else {
+                    throw new Error(`Invalid argument passed to trigger.toCost(). Expected Action or Technology, got ${typeof triggerable}.`);
                 }
                 if (resource !== undefined) {
                     let cost = triggerable.cost[resource.id];
@@ -7288,12 +7294,13 @@ declare global {
         amount<T extends Action>(action: T, count: number): void;
 
         /**
-         * Triggers an Action while affordable, optionally checking resource cost.
+         * Triggers an Action or Technology while affordable, optionally checking resource cost.
          * Checks isUnlocked() and isAffordable(true) before triggering.
-         * @param action - The building or ARPA to trigger
+         * For Actions, also checks count < limit.
+         * @param target - The building, ARPA, or technology to trigger
          * @param resource - Optional Resource to check cost for (e.g., resources.Money)
          * @param maxCost - Optional max cost threshold (default: resource storage cap)
-         * @param limit - Optional max build count (default: 1000000)
+         * @param limit - Optional max build count for Actions (default: 1000000, ignored for Technology)
          * @returns true if triggered, false otherwise
          * @example Build houses while affordable
          * \`\`\`
@@ -7307,8 +7314,12 @@ declare global {
          * \`\`\`
          * trigger.toCost(buildings.House, resources.Money, 500);
          * \`\`\`
+         * @example Research club while affordable
+         * \`\`\`
+         * trigger.toCost(techs.club);
+         * \`\`\`
          */
-        toCost<T extends Action>(action: T, resource?: Resource, maxCost?: number, limit?: number): boolean;
+        toCost(target: Action | Technology, resource?: Resource, maxCost?: number, limit?: number): boolean;
 
         /**
          * Triggers a custom resource list.
