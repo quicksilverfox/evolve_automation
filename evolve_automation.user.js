@@ -833,7 +833,7 @@
             this._location = location;
             this.gameMax = Number.MAX_SAFE_INTEGER;
             this._vueBinding = this._tab + "-" + this.id;
-            this.weighting = 0;
+            this._calcWeighting = 0;
             this.extraDescription = "";
             this.consumption = [];
             this.cost = {};
@@ -847,22 +847,46 @@
         get settingId() { return this._vueBinding; }
 
         get autoBuildEnabled() { return settings['bat' + this._vueBinding] }
-        set autoBuildEnabled(val) { settings['bat' + this._vueBinding] = val }
+        set autoBuildEnabled(val) {
+            let key = 'bat' + this._vueBinding;
+            settings[key] = val;
+            SnippetManager._overrides[key] = val;
+        }
 
         get autoStateEnabled() { return settings['bld_s_' + this._vueBinding] }
-        set autoStateEnabled(val) { settings['bld_s_' + this._vueBinding] = val }
+        set autoStateEnabled(val) {
+            let key = 'bld_s_' + this._vueBinding;
+            settings[key] = val;
+            SnippetManager._overrides[key] = val;
+        }
 
         get autoStateSmart() { return settings['bld_s2_' + this._vueBinding] }
-        set autoStateSmart(val) { settings['bld_s2_' + this._vueBinding] = val }
+        set autoStateSmart(val) {
+            let key = 'bld_s2_' + this._vueBinding;
+            settings[key] = val;
+            SnippetManager._overrides[key] = val;
+        }
 
         get priority() { return settingsRaw['bld_p_' + this._vueBinding] }
-        set priority(val) { settings['bld_p_' + this._vueBinding] = val }
+        set priority(val) {
+            let key = 'bld_p_' + this._vueBinding;
+            settings[key] = val;
+            SnippetManager._overrides[key] = val;
+        }
 
-        get weighting() { return settings['bld_w_' + this._vueBinding] }
-        set weighting(val) { settings['bld_w_' + this._vueBinding] = val }
+        get weighting() { return settings['bld_w_' + this._vueBinding]; }
+        set weighting(val) {
+            let key = 'bld_w_' + this._vueBinding;
+            settings[key] = val;
+            SnippetManager._overrides[key] = val;
+        }
 
         get maxBuild() { return settings['bld_m_' + this._vueBinding] }
-        set maxBuild(val) { settings['bld_m_' + this._vueBinding] = val }
+        set maxBuild(val) {
+            let key = 'bld_m_' + this._vueBinding;
+            settings[key] = val;
+            SnippetManager._overrides[key] = val;
+        }
 
         get _weighting() { return settings['bld_w_' + this._vueBinding] }
         get _autoMax() { return settings['bld_m_' + this._vueBinding] }
@@ -6428,7 +6452,7 @@
 
             // Iterate over buildings
             for (let building of this.priorityList){
-                building.weighting = building._weighting;
+                building._calcWeighting = building._weighting;
 
                 // Apply weighting rules
                 for (let j = 0; j < activeRules.length; j++) {
@@ -6439,18 +6463,18 @@
                         if (note !== "") {
                             building.extraDescription += note + "<br>";
                         }
-                        building.weighting *= activeRules[j][wrMultiplier](result);
+                        building._calcWeighting *= activeRules[j][wrMultiplier](result);
 
 
                         // Last rule disabled building, no need to check the rest
-                        if (building.weighting <= 0) {
+                        if (building._calcWeighting <= 0) {
                             break;
                         }
                     }
                 }
-                if (building.weighting > 0) {
-                    building.weighting = Math.max(Number.MIN_VALUE, building.weighting - 1e-7 * building.count);
-                    building.extraDescription = "AutoBuild weighting: " + getNiceNumber(building.weighting) + "<br>" + building.extraDescription;
+                if (building._calcWeighting > 0) {
+                    building._calcWeighting = Math.max(Number.MIN_VALUE, building._calcWeighting - 1e-7 * building.count);
+                    building.extraDescription = "AutoBuild weighting: " + getNiceNumber(building._calcWeighting) + "<br>" + building.extraDescription;
                 }
             }
         },
@@ -6461,7 +6485,7 @@
         },
 
         managedPriorityList() {
-            return this.priorityList.filter(building => building.weighting > 0);
+            return this.priorityList.filter(building => building._calcWeighting > 0);
         },
 
         managedStatePriorityList() {
@@ -6482,46 +6506,46 @@
         updateWeighting() {
             // Iterate over projects
             for (let project of this.priorityList){
-                project.weighting = project._weighting * project.currentStep;
+                project._calcWeighting = project._weighting * project.currentStep;
 
                 if (!project.isUnlocked()) {
-                    project.weighting = 0;
+                    project._calcWeighting = 0;
                     project.extraDescription = "Locked<br>";
                 }
                 if (!project.autoBuildEnabled || !settings.autoARPA) {
-                    project.weighting = 0;
+                    project._calcWeighting = 0;
                     project.extraDescription = "AutoBuild disabled<br>";
                 }
                 if (project.count >= project.autoMax && (project !== projects.ManaSyphon || !isPrestigeAllowed("vacuum"))) {
-                    project.weighting = 0;
+                    project._calcWeighting = 0;
                     project.extraDescription = "Maximum amount reached<br>";
                 }
                 if (settings.prestigeMADIgnoreArpa && isEarlyGame()) {
-                    project.weighting = 0;
+                    project._calcWeighting = 0;
                     project.extraDescription = "Projects ignored Pre-MAD<br>";
                 }
                 if (state.queuedTargets.includes(project)) {
-                    project.weighting = 0;
+                    project._calcWeighting = 0;
                     project.extraDescription = "Queued project, processing...<br>";
                 }
                 if (state.allTriggerlikeTargets.includes(project)) {
-                    project.weighting = 0;
+                    project._calcWeighting = 0;
                     project.extraDescription = "Active trigger, processing...<br>";
                 }
                 if (!project.isAffordable(true)) {
-                    project.weighting = 0;
+                    project._calcWeighting = 0;
                     project.extraDescription = "Not enough storage<br>";
                 }
                 if (project === projects.ManaSyphon && settings.prestigeBioseedConstruct && settings.prestigeType !== "vacuum" && game.global.race['witch_hunter']) {
-                    project.weighting = 0;
+                    project._calcWeighting = 0;
                     project.extraDescription = "Not needed for current prestige<br>";
                 }
 
                 if (settings.arpaScaleWeighting) {
-                    project.weighting /= 1 - (0.01 * project.progress);
+                    project._calcWeighting /= 1 - (0.01 * project.progress);
                 }
-                if (project.weighting > 0) {
-                    project.extraDescription = `AutoARPA weighting: ${getNiceNumber(project.weighting)} (${project.currentStep}%)<br>${project.extraDescription}`;
+                if (project._calcWeighting > 0) {
+                    project.extraDescription = `AutoARPA weighting: ${getNiceNumber(project._calcWeighting)} (${project.currentStep}%)<br>${project.extraDescription}`;
                 }
             }
         },
@@ -6531,7 +6555,7 @@
         },
 
         managedPriorityList() {
-            return this.priorityList.filter(project => project.weighting > 0);
+            return this.priorityList.filter(project => project._calcWeighting > 0);
         }
     }
 
@@ -7356,10 +7380,12 @@ declare global {
         autoStateEnabled: boolean;
         /** Whether smart power state management is enabled. */
         autoStateSmart: boolean;
-        /** Build priority (-1 to 100+). -1 means "same as highest", 0 means "only when prioritized". */
+        /** Build order in settings list (lower numbers come first). Also determines auto power priority. */
         priority: number;
-        /** Build weighting multiplier. */
+        /** Build weighting setting. */
         weighting: number;
+        /** Calculated weighting after rules are applied (read-only, internal). */
+        _calcWeighting: number;
         /** Max build count (-1 for unlimited, 0 to disable). */
         maxBuild: number;
 
@@ -10386,7 +10412,7 @@ declare global {
     }
 
     function findRequiredResourceWeight(resource) {
-        return state.unlockedBuildings.find(building => building.cost[resource.id] > resource.currentQuantity)?.weighting;
+        return state.unlockedBuildings.find(building => building.cost[resource.id] > resource.currentQuantity)?._calcWeighting;
     }
 
     function autoEvolution() {
@@ -13437,7 +13463,7 @@ declare global {
         let buildingList = [...BuildingManager.managedPriorityList(), ...ProjectManager.managedPriorityList()];
 
         // Sort array so we'll have prioritized buildings on top. We'll need that below to avoid deathlocks, when building 1 waits for building 2, and building 2 waits for building 3. That's something we don't want to happen when building 1 and building 3 doesn't conflicts with each other.
-        state.unlockedBuildings = buildingList.sort((a, b) => b.weighting - a.weighting);
+        state.unlockedBuildings = buildingList.sort((a, b) => b._calcWeighting - a._calcWeighting);
 
         let estimatedTime = {};
         let affordableCache = {};
@@ -13476,7 +13502,7 @@ declare global {
             if (!settings.buildingBuildIfStorageFull || !Object.keys(building.cost).some(res => resources[res].storageRatio > 0.98)) {
                 for (let j = 0; j < buildingList.length; j++) {
                     let other = buildingList[j];
-                    let weightDiffRatio = other.weighting / building.weighting;
+                    let weightDiffRatio = other._calcWeighting / building._calcWeighting;
 
                     // Buildings sorted by weighting, so once we reached something with lower weighting - all remaining also lower, and we don't care about them
                     if (weightDiffRatio <= 1.000001) {
