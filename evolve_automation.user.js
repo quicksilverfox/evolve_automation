@@ -3370,20 +3370,25 @@
       ],[
           () => {
               return buildings.LakeBireme.isAutoBuildable() && buildings.LakeBireme.isAffordable(true) &&
-                     buildings.LakeTransport.isAutoBuildable() && buildings.LakeTransport.isAffordable(true) &&
-                     resources.Lake_Support.rateOfChange <= 1; // Build any if there's spare support
+                     buildings.LakeTransport.isAutoBuildable() && buildings.LakeTransport.isAffordable(true);
           },
           (building) => {
               if (building === buildings.LakeBireme || building === buildings.LakeTransport) {
                   let biremeCount = buildings.LakeBireme.count;
                   let transportCount = buildings.LakeTransport.count;
                   let rating = game.global.blood['spire'] && game.global.blood.spire >= 2 ? 0.8 : 0.85;
-                  let nextBireme = (1 - (rating ** (biremeCount + 1))) * (transportCount * 5);
-                  let nextTransport = (1 - (rating ** biremeCount)) * ((transportCount + 1) * 5);
+                  let currentSupply = (1 - (rating ** biremeCount)) * (transportCount * 5);
+                  let marginalBireme = (1 - (rating ** (biremeCount + 1))) * (transportCount * 5) - currentSupply;
+                  let marginalTransport = (1 - (rating ** biremeCount)) * ((transportCount + 1) * 5) - currentSupply;
+                  let nextBireme, nextTransport;
                   if (settings.buildingsTransportGem) {
-                      let currentSupply = (1 - (rating ** biremeCount)) * (transportCount * 5);
-                      nextBireme = (nextBireme - currentSupply) / buildings.LakeBireme.cost["Soul_Gem"];
-                      nextTransport = (nextTransport - currentSupply) / buildings.LakeTransport.cost["Soul_Gem"];
+                      // Setting enabled - optimize per soul gem
+                      nextBireme = marginalBireme / buildings.LakeBireme.cost["Soul_Gem"];
+                      nextTransport = marginalTransport / buildings.LakeTransport.cost["Soul_Gem"];
+                  } else {
+                      // Default - optimize for maximum supplies
+                      nextBireme = marginalBireme;
+                      nextTransport = marginalTransport;
                   }
                   if (building === buildings.LakeBireme && nextBireme < nextTransport) {
                       return buildings.LakeTransport;
@@ -21499,7 +21504,7 @@ declare global {
 
         addSettingsToggle(currentNode, "buildingsIgnoreZeroRate", "Do not wait for resources without income", "Weighting checks will ignore resources without positive income(craftables, inactive factory goods, etc), buildings with such resources will not delay other buildings.");
         addSettingsToggle(currentNode, "buildingsLimitPowered", "Limit amount of powered buildings", "With this option enabled Max Build will prevent powering extra building. Can be useful to disable buildings with overrided settings.");
-        addSettingsToggle(currentNode, "buildingsTransportGem", "Build cheapest Supplies transport", "By default script chooses between Lake Transport and Lake Bireme Warship comparing their 'Supplies Per Support', with this option enabled it will compare 'Supplies Per Soulgems' instead.");
+        addSettingsToggle(currentNode, "buildingsTransportGem", "Build cheapest Supplies transport", "By default script chooses between Lake Transport and Lake Bireme Warship comparing their 'Supplies Per Support', with this option enabled it will compare 'Supplies Per Soulgems' instead. It will be more aggressive when building the fleet, but will end up with 10-15% less supplies per support.");
         addSettingsToggle(currentNode, "buildingsBestFreighter", "Build most efficient freighters", "With this option enabled script will compare 'Money Storage per Crew' of Freighter and Super Freighter, and only build the best one. Without this option no restrictions will be applied. Works only when both ships are buildable.");
         addSettingsToggle(currentNode, "buildingsUseMultiClick", "Bulk build multi-segmented buildings", "With this option enabled, the script will build as many segments as are affordable at once, instead of one per tick.");
         addSettingsNumber(currentNode, "buildingTowerSuppression", "Minimum suppression for Towers", "East Tower and West Tower won't be built until minimum suppression is reached");
