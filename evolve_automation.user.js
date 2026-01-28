@@ -3376,25 +3376,55 @@
               if (building === buildings.LakeBireme || building === buildings.LakeTransport) {
                   let biremeCount = buildings.LakeBireme.count;
                   let transportCount = buildings.LakeTransport.count;
+                  let total = biremeCount + transportCount;
                   let rating = game.global.blood['spire'] && game.global.blood.spire >= 2 ? 0.8 : 0.85;
-                  let currentSupply = (1 - (rating ** biremeCount)) * (transportCount * 5);
-                  let marginalBireme = (1 - (rating ** (biremeCount + 1))) * (transportCount * 5) - currentSupply;
-                  let marginalTransport = (1 - (rating ** biremeCount)) * ((transportCount + 1) * 5) - currentSupply;
-                  let nextBireme, nextTransport;
-                  if (settings.buildingsTransportGem) {
-                      // Setting enabled - optimize per soul gem
-                      nextBireme = marginalBireme / buildings.LakeBireme.cost["Soul_Gem"];
-                      nextTransport = marginalTransport / buildings.LakeTransport.cost["Soul_Gem"];
+                  let spareSupport = resources.Lake_Support.rateOfChange > 1;
+
+                  // Calculate optimal bireme count for next build
+                  let optimalBiremes = 0;
+                  let bestSupply = 0;
+                  for (let b = 0; b <= total + 1; b++) {
+                      let supply = (1 - rating ** b) * ((total + 1 - b) * 5);
+                      if (supply > bestSupply) {
+                          bestSupply = supply;
+                          optimalBiremes = b;
+                      }
+                  }
+
+                  // If we already have enough biremes, only build transports (upgrade mode)
+                  if (settings.buildingsTransportUpgrade && biremeCount >= optimalBiremes) {
+                      if (building === buildings.LakeBireme) {
+                          // Only redirect if transport is currently affordable, otherwise block bireme
+                          if (resources.Soul_Gem.currentQuantity >= buildings.LakeTransport.cost["Soul_Gem"]) {
+                              return buildings.LakeTransport;
+                          }
+                          building._calcWeighting = 0;
+                          building.extraDescription += "Waiting for Soul Gems to upgrade to Transport<br>";
+                      }
+                  } else if (spareSupport) {
+                      // Still need biremes and have spare support - use per-gem optimization
+                      let currentSupply = (1 - (rating ** biremeCount)) * (transportCount * 5);
+                      let marginalBireme = (1 - (rating ** (biremeCount + 1))) * (transportCount * 5) - currentSupply;
+                      let marginalTransport = (1 - (rating ** biremeCount)) * ((transportCount + 1) * 5) - currentSupply;
+                      let nextBireme = marginalBireme / buildings.LakeBireme.cost["Soul_Gem"];
+                      let nextTransport = marginalTransport / buildings.LakeTransport.cost["Soul_Gem"];
+                      if (building === buildings.LakeBireme && nextBireme < nextTransport) {
+                          return buildings.LakeTransport;
+                      }
+                      if (building === buildings.LakeTransport && nextTransport < nextBireme) {
+                          return buildings.LakeBireme;
+                      }
                   } else {
-                      // Default - optimize for maximum supplies
-                      nextBireme = marginalBireme;
-                      nextTransport = marginalTransport;
-                  }
-                  if (building === buildings.LakeBireme && nextBireme < nextTransport) {
-                      return buildings.LakeTransport;
-                  }
-                  if (building === buildings.LakeTransport && nextTransport < nextBireme) {
-                      return buildings.LakeBireme;
+                      // No spare support - use per-supply optimization, a fallback for disabled buildingConsumptionCheck
+                      let currentSupply = (1 - (rating ** biremeCount)) * (transportCount * 5);
+                      let marginalBireme = (1 - (rating ** (biremeCount + 1))) * (transportCount * 5) - currentSupply;
+                      let marginalTransport = (1 - (rating ** biremeCount)) * ((transportCount + 1) * 5) - currentSupply;
+                      if (building === buildings.LakeBireme && marginalBireme < marginalTransport) {
+                          return buildings.LakeTransport;
+                      }
+                      if (building === buildings.LakeTransport && marginalTransport < marginalBireme) {
+                          return buildings.LakeBireme;
+                      }
                   }
               }
           },
@@ -9825,7 +9855,7 @@ declare global {
             buildingTowerSuppression: 100,
             buildingBuildPassCount: 1,
             buildingConsumptionCheck: "perResource",
-            buildingsTransportGem: false,
+            buildingsTransportUpgrade: true,
             buildingsBestFreighter: false,
             buildingsUseMultiClick: false,
             buildingEnabledAll: true,
@@ -14381,6 +14411,28 @@ declare global {
             let transport = buildings.LakeTransport;
             let biremeCount = bireme.count;
             let transportCount = transport.count;
+            let total = biremeCount + transportCount;
+
+            // Calculate optimal bireme count for current total
+            let optimalBiremes = 0;
+            let bestSupply = 0;
+            for (let b = 0; b <= total; b++) {
+                let supply = (1 - rating ** b) * ((total - b) * 5);
+                if (supply > bestSupply) {
+                    bestSupply = supply;
+                    optimalBiremes = b;
+                }
+            }
+
+            // If excess biremes and transport is buildable with enough soul gems, free just 1 support
+            if (settings.buildingsTransportUpgrade && biremeCount > optimalBiremes &&
+                transport.isAutoBuildable() && transport.isAffordable(true) &&
+                resources.Soul_Gem.currentQuantity >= transport.cost["Soul_Gem"]) {
+                biremeCount = bireme.stateOnCount - 1;
+                bireme.extraDescription += `Upgrading: Disabling 1 to build Transport (${bireme.count}→${optimalBiremes} optimal)<br>`;
+            }
+
+            // Handle over-capacity
             while (biremeCount + transportCount > lakeSupport) {
                 let nextBireme = (1 - (rating ** (biremeCount - 1))) * (transportCount * 5);
                 let nextTransport = (1 - (rating ** biremeCount)) * ((transportCount - 1) * 5);
@@ -14390,6 +14442,7 @@ declare global {
                     transportCount--;
                 }
             }
+
             bireme.tryAdjustState(biremeCount - bireme.stateOnCount);
             transport.tryAdjustState(transportCount - transport.stateOnCount);
         }
@@ -21504,7 +21557,7 @@ declare global {
 
         addSettingsToggle(currentNode, "buildingsIgnoreZeroRate", "Do not wait for resources without income", "Weighting checks will ignore resources without positive income(craftables, inactive factory goods, etc), buildings with such resources will not delay other buildings.");
         addSettingsToggle(currentNode, "buildingsLimitPowered", "Limit amount of powered buildings", "With this option enabled Max Build will prevent powering extra building. Can be useful to disable buildings with overrided settings.");
-        addSettingsToggle(currentNode, "buildingsTransportGem", "Build cheapest Supplies transport", "By default script chooses between Lake Transport and Lake Bireme Warship comparing their 'Supplies Per Support', with this option enabled it will compare 'Supplies Per Soulgems' instead. It will be more aggressive when building the fleet, but will end up with 10-15% less supplies per support.");
+        addSettingsToggle(currentNode, "buildingsTransportUpgrade", "Upgrade Lake fleet", "When enabled, the script will try to use excess Soul Gems to replace inefficient Biremes with Transports to achieve optimal Supplies output using available Lake Support. When disabled, it will only use supplies per gem optimization during buildup without upgrading later.");
         addSettingsToggle(currentNode, "buildingsBestFreighter", "Build most efficient freighters", "With this option enabled script will compare 'Money Storage per Crew' of Freighter and Super Freighter, and only build the best one. Without this option no restrictions will be applied. Works only when both ships are buildable.");
         addSettingsToggle(currentNode, "buildingsUseMultiClick", "Bulk build multi-segmented buildings", "With this option enabled, the script will build as many segments as are affordable at once, instead of one per tick.");
         addSettingsNumber(currentNode, "buildingTowerSuppression", "Minimum suppression for Towers", "East Tower and West Tower won't be built until minimum suppression is reached");
