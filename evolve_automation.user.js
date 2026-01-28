@@ -6963,6 +6963,29 @@
                     return fn(triggerable);
                 }
             };
+            // trigger() but only if affordable (and optionally resource cost is below maxCost).
+            // Examples:
+            //   trigger.toCost(buildings.House) - builds houses while affordable
+            //   trigger.toCost(buildings.House, resources.Money) - builds houses while Money cost < storage cap
+            //   trigger.toCost(buildings.House, resources.Money, 500) - builds houses while Money cost < 500
+            fn.toCost = (triggerable, resource, maxCost, limit = 1000000) => {
+                if (!(triggerable instanceof Action)) {
+                    throw new Error(`Invalid action passed to trigger.toCost(). Expected Action, got ${typeof triggerable}.`);
+                }
+                if (!triggerable.isUnlocked() ||
+                    !triggerable.isAffordable(true) ||
+                    triggerable.count >= limit) {
+                    return false;
+                }
+                if (resource !== undefined) {
+                    let cost = triggerable.cost[resource.id];
+                    if (cost === undefined) return false;
+                    let max = maxCost ?? resource.maxQuantity ?? 0;
+                    if (cost >= max) return false;
+                }
+                fn(triggerable);
+                return true;
+            };
             // trigger() but only supports custom lists.
             // Returns a boolean true if all costs in the list are currently satisfied.
             fn.custom = (triggerable, allowedActions) => {
@@ -7263,6 +7286,29 @@ declare global {
          * \`\`\`
          */
         amount<T extends Action>(action: T, count: number): void;
+
+        /**
+         * Triggers an Action while affordable, optionally checking resource cost.
+         * Checks isUnlocked() and isAffordable(true) before triggering.
+         * @param action - The building or ARPA to trigger
+         * @param resource - Optional Resource to check cost for (e.g., resources.Money)
+         * @param maxCost - Optional max cost threshold (default: resource storage cap)
+         * @param limit - Optional max build count (default: 1000000)
+         * @returns true if triggered, false otherwise
+         * @example Build houses while affordable
+         * \`\`\`
+         * trigger.toCost(buildings.House);
+         * \`\`\`
+         * @example Build houses while Money cost < storage cap
+         * \`\`\`
+         * trigger.toCost(buildings.House, resources.Money);
+         * \`\`\`
+         * @example Build houses while Money cost < 500
+         * \`\`\`
+         * trigger.toCost(buildings.House, resources.Money, 500);
+         * \`\`\`
+         */
+        toCost<T extends Action>(action: T, resource?: Resource, maxCost?: number, limit?: number): boolean;
 
         /**
          * Triggers a custom resource list.
