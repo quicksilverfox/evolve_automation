@@ -6999,10 +6999,10 @@
                 }
             };
             // trigger() but only if affordable (and optionally resource cost is below maxCost).
+            // Unlike amount() it will not try to allocate storage to make it affordable. It prevents softlocks, but also makes it less aggressive.
             // Examples:
             //   trigger.toCost(buildings.House) - builds houses while affordable
             //   trigger.toCost(buildings.House, 10) - builds up to 10 houses while affordable
-            //   trigger.toCost(buildings.House, resources.Money) - builds houses while Money cost < storage cap
             //   trigger.toCost(buildings.House, resources.Money, 500) - builds houses while Money cost < 500
             //   trigger.toCost(buildings.House, resources.Money, 500, 10) - builds up to 10 houses while Money cost < 500
             //   trigger.toCost(techs.club) - researches club while affordable
@@ -7026,11 +7026,9 @@
                 } else {
                     throw new Error(`Invalid argument passed to trigger.toCost(). Expected Action or Technology, got ${typeof triggerable}.`);
                 }
-                if (resource !== undefined) {
-                    let cost = triggerable.cost[resource.id];
-                    if (cost === undefined) return false;
-                    let max = maxCost ?? resource.maxQuantity ?? 0;
-                    if (cost >= max) return false;
+                if (resource !== undefined && maxCost !== undefined) {
+                    let cost = triggerable.cost[resource.id] ?? 0;
+                    if (cost >= maxCost) return false;
                 }
                 fn(triggerable);
                 return true;
@@ -7352,10 +7350,6 @@ declare global {
          * @example Build up to 10 houses while affordable
          * \`\`\`
          * trigger.toCost(buildings.House, 10);
-         * \`\`\`
-         * @example Build houses while Money cost < storage cap
-         * \`\`\`
-         * trigger.toCost(buildings.House, resources.Money);
          * \`\`\`
          * @example Build houses while Money cost < 500
          * \`\`\`
