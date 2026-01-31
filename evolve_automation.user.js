@@ -360,8 +360,23 @@
         get autoStorageEnabled() { return settings['res_storage' + this.id] }
         get storagePriority() { return settingsRaw['res_storage_p_' + this.id] }
         get storeOverflow() { return settings['res_storage_o_' + this.id] }
+        set storeOverflow(val) {
+            let key = 'res_storage_o_' + this.id;
+            settings[key] = val;
+            SnippetManager._overrides[key] = val;
+        }
         get minStorage() { return settings['res_min_store' + this.id] }
+        set minStorage(val) {
+            let key = 'res_min_store' + this.id;
+            settings[key] = val;
+            SnippetManager._overrides[key] = val;
+        }
         get maxStorage() { return settings['res_max_store' + this.id] }
+        set maxStorage(val) {
+            let key = 'res_max_store' + this.id;
+            settings[key] = val;
+            SnippetManager._overrides[key] = val;
+        }
         get marketPriority() { return settingsRaw['res_buy_p_' + this.id] }
         get autoBuyEnabled() { return settings['buy' + this.id] }
         get autoBuyRatio() { return settings['res_buy_r_' + this.id] }
