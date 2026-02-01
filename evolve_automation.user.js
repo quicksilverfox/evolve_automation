@@ -16264,8 +16264,29 @@ declare global {
                 if (res.currentQuantity < resourceCost) {
                     className = 'has-text-danger';
 
-                    if (res.maxQuantity >= resourceCost && res.income > 0) {
-                        const timeLeftRaw = (resourceCost - res.currentQuantity) / res.income;
+                    const costPerSegment = costs[resource];
+                    const canAffordOneSegment = res.maxQuantity >= costPerSegment;
+                    const remainingSegments = isArpaProject ? ((100 - target.progress) / target.currentStep) :
+                                              isMultiSegmented ? (target.gameMax - target.count) : 1;
+
+                    if (res.income > 0 && (res.maxQuantity >= resourceCost || ((isArpaProject || isMultiSegmented) && canAffordOneSegment))) {
+                        let timeLeftRaw;
+                        if (res.maxQuantity >= resourceCost) {
+                            // Storage can hold total cost - simple calculation
+                            timeLeftRaw = (resourceCost - res.currentQuantity) / res.income;
+                        } else {
+                            // Calculate segment by segment
+                            timeLeftRaw = 0;
+                            let currentAmount = res.currentQuantity;
+                            for (let i = 0; i < remainingSegments; i++) {
+                                if (currentAmount >= costPerSegment) {
+                                    currentAmount -= costPerSegment;
+                                } else {
+                                    timeLeftRaw += (costPerSegment - currentAmount) / res.income;
+                                    currentAmount = 0;
+                                }
+                            }
+                        }
 
                         if (target instanceof Technology && timeLeftRaw > researchTimeLeft) {
                             researchTimeLeft = timeLeftRaw;
