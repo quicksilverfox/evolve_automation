@@ -3406,18 +3406,8 @@
                       }
                   }
 
-                  // If we already have enough biremes, only build transports (upgrade mode)
-                  if (settings.buildingsTransportUpgrade && biremeCount >= optimalBiremes) {
-                      if (building === buildings.LakeBireme) {
-                          // Only redirect if transport is currently affordable, otherwise block bireme
-                          if (resources.Soul_Gem.currentQuantity >= buildings.LakeTransport.cost["Soul_Gem"]) {
-                              return buildings.LakeTransport;
-                          }
-                          building._calcWeighting = 0;
-                          building.extraDescription += "Waiting for Soul Gems to upgrade to Transport<br>";
-                      }
-                  } else if (spareSupport) {
-                      // Still need biremes and have spare support - use per-gem optimization
+                  if (spareSupport) {
+                      // Have spare support - use per-gem optimization with efficiency tooltips
                       let currentSupply = (1 - (rating ** biremeCount)) * (transportCount * 5);
                       let marginalBireme = (1 - (rating ** (biremeCount + 1))) * (transportCount * 5) - currentSupply;
                       let marginalTransport = (1 - (rating ** biremeCount)) * ((transportCount + 1) * 5) - currentSupply;
@@ -3428,6 +3418,15 @@
                       }
                       if (building === buildings.LakeTransport && nextTransport < nextBireme) {
                           return buildings.LakeBireme;
+                      }
+                  } else if (settings.buildingsTransportUpgrade && biremeCount > optimalBiremes) {
+                      // No spare support but have excess biremes - upgrade mode (power code will disable one)
+                      if (building === buildings.LakeBireme) {
+                          if (resources.Soul_Gem.currentQuantity >= buildings.LakeTransport.cost["Soul_Gem"]) {
+                              return buildings.LakeTransport;
+                          }
+                          building._calcWeighting = 0;
+                          building.extraDescription += "Waiting for Soul Gems to upgrade to Transport<br>";
                       }
                   } else {
                       // No spare support - use per-supply optimization, a fallback for disabled buildingConsumptionCheck
