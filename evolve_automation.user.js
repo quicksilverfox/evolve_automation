@@ -3393,7 +3393,7 @@
                   let transportCount = buildings.LakeTransport.count;
                   let total = biremeCount + transportCount;
                   let rating = game.global.blood['spire'] && game.global.blood.spire >= 2 ? 0.8 : 0.85;
-                  let spareSupport = resources.Lake_Support.rateOfChange > 1;
+                  let spareSupport = resources.Lake_Support.rateOfChange > 0;
 
                   // Calculate optimal bireme count for next build
                   let optimalBiremes = 0;
