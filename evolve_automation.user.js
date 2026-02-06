@@ -2489,8 +2489,40 @@
         };
 
         tooltipInfo["space-shipyard"] = (obj) => {
-            if (!settings.autoFleet || !FleetManagerOuter.nextShipMsg) return "";
-            return FleetManagerOuter.nextShipMsg;
+            let lines = [];
+
+            if (settings.autoFleet && FleetManagerOuter.nextShipMsg) {
+                lines.push(FleetManagerOuter.nextShipMsg);
+            }
+
+            // Add fleet status summary for all active regions
+            if (game.global.tech?.['syndicate'] && game.global.race['truepath']) {
+                let m = FleetManagerOuter;
+                let mult = getPiracyMultiplier();
+                let statusLines = [];
+                for (let region of m.Regions) {
+                    if (!m.isUnlocked(region)) continue;
+
+                    let rawPiracy = game.global.space.syndicate[region] || 0;
+                    let effectivePiracy = Math.round(rawPiracy * mult);
+                    let power = m.getFleetPowerAt(region);
+                    let timeToOverrun = m.getTimeUntilOverrun(region, power.patrol);
+
+                    // Compact format: show offset (positive = excess security)
+                    let offset = power.patrol - effectivePiracy;
+                    let offsetStr = offset >= 0
+                        ? `<span class="has-text-success">+${offset}</span>`
+                        : `<span class="has-text-danger">${offset}</span>`;
+                    // Only show time if not safe and not already overrun
+                    let timeStr = (timeToOverrun > 0 && timeToOverrun < Infinity) ? ` ${poly.timeFormat(timeToOverrun)}` : '';
+                    statusLines.push(`${m.getLocName(region)}: ${offsetStr}${timeStr}`);
+                }
+                if (statusLines.length > 0) {
+                    lines.push(statusLines.join('<br>'));
+                }
+            }
+
+            return lines.join('<br>');
         };
 
         tooltipInfo["eden-spirit_battery"] = (obj) => {
@@ -5903,7 +5935,12 @@
         },
 
         getShipAttackPower(ship) {
-            return Math.round(this.WeaponPower[ship.weapon] * this.ClassPower[ship.class]);
+            let rating = this.WeaponPower[ship.weapon];
+            // Wish for power grants 25% ship rating bonus
+            if (game.global.race['wish'] && game.global.race['wishStats']?.ship) {
+                rating = Math.round(rating * 1.25);
+            }
+            return Math.round(rating * this.ClassPower[ship.class]);
         },
 
         shipCount(loc, template) {
@@ -5920,6 +5957,271 @@
                 }
             }
             return count;
+        },
+
+        findParkedShip(template) {
+            let yard = game.global.space.shipyard;
+            if (!yard?.ships) return null;
+
+            for (let i = 0; i < yard.ships.length; i++) {
+                let ship = yard.ships[i];
+                // Ship must be parked at Ceres and not in transit
+                if (ship.location !== 'spc_dwarf' || ship.transit !== 0) continue;
+
+                // Check if ship matches template (null = any value accepted)
+                if ((template.class === null || ship.class === template.class)
+                    && (template.power === null || ship.power === template.power)
+                    && (template.weapon === null || ship.weapon === template.weapon)
+                    && (template.armor === null || ship.armor === template.armor)
+                    && (template.engine === null || ship.engine === template.engine)
+                    && (template.sensor === null || ship.sensor === template.sensor)) {
+                    return i; // Return ship index
+                }
+            }
+            return null;
+        },
+
+        sendParkedShip(shipIndex, region) {
+            let crew = this.ClassCrew[game.global.space.shipyard.ships[shipIndex].class];
+            // Ships at Ceres need crew to launch
+            if (WarManager.currentCityGarrison < crew) {
+                return false;
+            }
+            getVueById('shipReg0')?.setLoc(region, shipIndex);
+            return true;
+        },
+
+        getSyndicateCap(region) {
+            if (!game.global.tech['syndicate'] || !game.global.race['truepath']) return 0;
+            if (game.actions.space[region]?.info?.syndicate_cap) {
+                return game.actions.space[region].info.syndicate_cap();
+            }
+            return 500; // Default cap
+        },
+
+        getMaxSyndicateCap(region) {
+            // Maximum possible cap (after all tech upgrades)
+            const maxCaps = {
+                spc_titan: 2000,
+                spc_enceladus: 1500,
+                spc_triton: 5000,
+                spc_kuiper: 2500,
+                spc_eris: 7500
+            };
+            return maxCaps[region] || 500;
+        },
+
+        getSyndicateGrowthRate(region) {
+            // Syndicate grows by 1 with 1/10 chance per tick (1/5 for Triton)
+            // Returns expected growth per second (assuming ~4 ticks/sec)
+            let chance = region === 'spc_triton' ? 0.2 : 0.1;
+            return chance * 4; // ~0.4/sec normally, ~0.8/sec for Triton
+        },
+
+        getSensorRange(ship) {
+            // Hull factor based on ship class
+            let hf = 1;
+            switch (ship.class) {
+                case 'corvette':
+                case 'frigate':
+                    hf = 2;
+                    break;
+                case 'destroyer':
+                case 'cruiser':
+                    hf = 1.5;
+                    break;
+                case 'explorer':
+                    hf = 5;
+                    break;
+                default:
+                    hf = 1;
+                    break;
+            }
+            switch (ship.sensor) {
+                case 'visual': return 1;
+                case 'radar': return 10 * hf;
+                case 'lidar': return 18 * hf;
+                case 'quantum': return 32 * hf;
+            }
+            return 0;
+        },
+
+        getFleetPowerAt(region, excludeShipIndex = -1) {
+            if (!game.global.space.shipyard?.ships) return { patrol: 0, sensor: 0 };
+
+            let patrol = 0;
+            let sensor = 0;
+
+            for (let i = 0; i < game.global.space.shipyard.ships.length; i++) {
+                if (i === excludeShipIndex) continue;
+                let ship = game.global.space.shipyard.ships[i];
+                if (ship.location === region && ship.transit === 0 && ship.fueled) {
+                    let rating = this.getShipAttackPower(ship);
+                    patrol += ship.damage > 0 ? Math.round(rating * (100 - ship.damage) / 100) : rating;
+                    sensor += this.getSensorRange(ship);
+                }
+            }
+
+            // Add static defenses (use game.p_on/support_on for accuracy)
+            if (region === 'spc_enceladus') {
+                let active = Math.min(game.support_on?.['operating_base'] ?? 0, game.p_on?.['operating_base'] ?? 0);
+                patrol += active * 50;
+            } else if (region === 'spc_titan') {
+                patrol += (game.p_on?.['sam'] ?? 0) * 25;
+            } else if (region === 'spc_triton' && (game.p_on?.['fob'] ?? 0) > 0) {
+                patrol += 500;
+                sensor += 10;
+            }
+
+            if (sensor > 100) {
+                sensor = Math.round((sensor - 100) / ((sensor - 100) + 200) * 100) + 100;
+            }
+
+            patrol = Math.round(patrol * ((sensor + 25) / 125));
+            return { patrol, sensor };
+        },
+
+        getTimeUntilOverrun(region, currentPatrol = null) {
+            if (!game.global.tech['syndicate'] || !game.global.race['truepath']) return Infinity;
+            if (!game.global.space.syndicate?.hasOwnProperty(region)) return Infinity;
+
+            let rawPiracy = game.global.space.syndicate[region];
+            let mult = getPiracyMultiplier();
+            let effectivePiracy = rawPiracy * mult;
+            let cap = this.getSyndicateCap(region);
+
+            if (currentPatrol === null) {
+                currentPatrol = this.getFleetPowerAt(region).patrol;
+            }
+
+            if (effectivePiracy >= currentPatrol) return 0; // Already overrun
+            if (rawPiracy >= cap) return Infinity; // At cap, won't grow more
+
+            // Calculate raw piracy needed for effective piracy to exceed patrol
+            let rawPiracyNeeded = Math.ceil(currentPatrol / mult);
+            if (rawPiracyNeeded > cap) return Infinity; // Can never reach patrol even at cap
+
+            let growthRate = this.getSyndicateGrowthRate(region);
+            let needToGrow = rawPiracyNeeded - rawPiracy;
+
+            return needToGrow / growthRate;
+        },
+
+        // Returns: 0 = needed, 1 = excess for current cap, 2 = excess for max cap
+        getShipExcessState(shipIndex) {
+            let ship = game.global.space.shipyard.ships[shipIndex];
+            if (!ship || ship.transit > 0 || !ship.fueled) return 0;
+
+            let region = ship.location;
+            if (region === 'spc_dwarf' || region === 'tauceti') return 0; // Parked ships aren't consuming resources
+
+            let mult = getPiracyMultiplier();
+            let currentCap = this.getSyndicateCap(region);
+            let maxCap = this.getMaxSyndicateCap(region);
+            let effectiveCurrentCap = currentCap * mult;
+            let effectiveMaxCap = maxCap * mult;
+
+            let powerWith = this.getFleetPowerAt(region);
+            let powerWithout = this.getFleetPowerAt(region, shipIndex);
+
+            // Not excessive if removing would drop sensor below 100 (loses intel bonus)
+            if (powerWith.sensor >= 100 && powerWithout.sensor < 100) {
+                return 0;
+            }
+
+            // Check against max cap first (most permissive for redeployment)
+            if (powerWithout.patrol >= effectiveMaxCap) {
+                return 2; // Excess even for max cap - definitely safe
+            }
+
+            // Check against current cap
+            if (powerWithout.patrol >= effectiveCurrentCap) {
+                return 1; // Excess for current cap only - safe for now
+            }
+
+            return 0; // Needed
+        },
+
+        markExcessiveShips() {
+            if (!game.global.tech['syndicate'] || !game.global.race['truepath']) return;
+            if (!game.global.space.shipyard?.ships) return;
+
+            for (let i = 0; i < game.global.space.shipyard.ships.length; i++) {
+                let shipRow = document.getElementById(`shipReg${i}`);
+                if (!shipRow) continue;
+
+                // Remove existing marker
+                let existingMarker = shipRow.querySelector('.script-excess-marker');
+                if (existingMarker) existingMarker.remove();
+
+                let ship = game.global.space.shipyard.ships[i];
+                if (ship.location === 'spc_dwarf') continue; // Don't mark parked ships
+
+                let state = this.getShipExcessState(i);
+                if (state > 0) {
+                    let marker = document.createElement('span');
+                    marker.className = 'script-excess-marker';
+                    if (state === 2) {
+                        // Excess for max cap - definitely safe (green)
+                        marker.style.cssText = 'color: #48c774; font-weight: bold; margin-left: 4px;';
+                        marker.textContent = '[++]';
+                        marker.title = 'Excess: safe to redeploy - region protected even at max piracy cap';
+                    } else {
+                        // Excess for current cap only - safe for now (yellow)
+                        marker.style.cssText = 'color: #ffdd57; font-weight: bold; margin-left: 4px;';
+                        marker.textContent = '[+]';
+                        marker.title = 'Excess for now: safe at current cap, may be needed after tech upgrades';
+                    }
+                    // Insert after ship name in row1
+                    let row1 = shipRow.querySelector('.row1');
+                    let nameSpan = row1?.querySelector('.name');
+                    if (nameSpan && nameSpan.nextSibling) {
+                        nameSpan.parentNode.insertBefore(marker, nameSpan.nextSibling);
+                    } else if (row1) {
+                        row1.insertBefore(marker, row1.firstChild?.nextSibling || null);
+                    }
+                }
+            }
+        },
+
+        generateRegionTooltips() {
+            if (!game.global.tech['syndicate'] || !game.global.race['truepath']) return;
+
+            let mult = getPiracyMultiplier();
+
+            for (let region of this.Regions) {
+                if (!this.isUnlocked(region)) continue;
+
+                let rawPiracy = game.global.space.syndicate[region] || 0;
+                let effectivePiracy = Math.round(rawPiracy * mult);
+                let effectiveCurrentCap = Math.round(this.getSyndicateCap(region) * mult);
+                let effectiveMaxCap = Math.round(this.getMaxSyndicateCap(region) * mult);
+                let power = this.getFleetPowerAt(region);
+                let timeToOverrun = this.getTimeUntilOverrun(region, power.patrol);
+
+                // Count ships at this region
+                let shipCount = 0;
+                if (game.global.space.shipyard?.ships) {
+                    for (let ship of game.global.space.shipyard.ships) {
+                        if (ship.location === region && ship.transit === 0) shipCount++;
+                    }
+                }
+
+                let lines = [];
+                lines.push(`Patrol: ${power.patrol} | Piracy: ${effectivePiracy}`);
+                lines.push(`Sensor: ${power.sensor} | Ships: ${shipCount}`);
+                lines.push(`Cap: ${effectiveCurrentCap}${effectiveMaxCap > effectiveCurrentCap ? ` (max ${effectiveMaxCap})` : ''}`);
+
+                if (timeToOverrun > 0 && timeToOverrun < Infinity) {
+                    lines.push(`<span class="has-text-warning">Overrun in ${poly.timeFormat(timeToOverrun)}</span>`);
+                } else if (power.patrol >= effectivePiracy) {
+                    lines.push(`<span class="has-text-success">Protected</span>`);
+                } else {
+                    lines.push(`<span class="has-text-danger">Unprotected</span>`);
+                }
+
+                state.tooltips[region] = lines.join('<br>');
+            }
         },
 
         // export function syndicate(region,extra) from truepath.js with added "all" argument
@@ -5964,15 +6266,16 @@
                     if (ship.location === region && ((ship.transit === 0 && ship.fueled) || all)){
                         let rating = this.getShipAttackPower(ship);
                         patrol += ship.damage > 0 ? Math.round(rating * (100 - ship.damage) / 100) : rating;
-                        sensor += this.SensorRange[ship.sensor];
+                        sensor += this.getSensorRange(ship);
                     }
                 }
 
                 if (region === 'spc_enceladus'){
-                    patrol += buildings.EnceladusBase.stateOnCount * 50;
+                    let active = Math.min(game.support_on?.['operating_base'] ?? 0, game.p_on?.['operating_base'] ?? 0);
+                    patrol += active * 50;
                 } else if (region === 'spc_titan'){
-                    patrol += buildings.TitanSAM.stateOnCount * 25;
-                } else if (region === 'spc_triton' && buildings.TritonFOB.stateOnCount > 0){
+                    patrol += (game.p_on?.['sam'] ?? 0) * 25;
+                } else if (region === 'spc_triton' && (game.p_on?.['fob'] ?? 0) > 0){
                     patrol += 500;
                     sensor += 10;
                 }
@@ -15106,6 +15409,12 @@ declare global {
             return;
         }
 
+        // Mark ships that can be safely redeployed
+        m.markExcessiveShips();
+
+        // Add region tooltips with syndicate/fleet breakdown
+        m.generateRegionTooltips();
+
         if (settings.fleetOuterShips === "none") {
             m.updateNextShip();
             m.nextShipMsg = `Ship construction is disabled`;
@@ -15187,6 +15496,25 @@ declare global {
         m.updateNextShip(newShip);
         m.nextShipName = `${m.getShipName(newShip)} to ${m.getLocName(targetRegion)}`;
 
+        // Try to send a parked ship from Ceres first
+        let parkedIndex = m.findParkedShip(newShip);
+        if (parkedIndex !== null) {
+            let ship = game.global.space.shipyard.ships[parkedIndex];
+            let crew = m.ClassCrew[ship.class];
+            if (WarManager.currentCityGarrison - crew >= minCrew) {
+                if (m.sendParkedShip(parkedIndex, targetRegion)) {
+                    GameLog.logSuccess("outer_fleet", `${m.getShipName(ship)} redeployed from Ceres to ${m.getLocName(targetRegion)}.`, ['combat']);
+                    m.nextShipRegion = null;
+                    return;
+                }
+            } else {
+                m.nextShipMsg = `Parked ${m.getShipName(ship)} at Ceres is missing crew`;
+                m.nextShipDesiredCrew = crew;
+                return;
+            }
+        }
+
+        // No suitable parked ship, build new one
         let missing = m.getMissingResource(newShip);
         if (missing) {
             m.nextShipMsg = `Next ship(${m.nextShipName}) is missing ${resources[missing].name}`;
