@@ -7048,7 +7048,11 @@
 
         static #evolutionPhaseComplete = false;
 
+        // Track if snippets have run at least once this session
+        static _hasInitialized = false;
+
         static runSnippets() {
+            this._hasInitialized = true;
             this.#lastRunData = {};
             this.activeTriggers = [];
             this.customResourceDemands = [];
@@ -17327,7 +17331,7 @@ declare global {
 
         updateScriptData(); // Sync exposed data with script variables
         updateOverrides();  // Apply settings overrides as soon as possible
-        // Let user change overrides in very early snippets, needs to run before we make use of them
+        // Apply snippet overrides from previous tick
         if (settings.masterScriptToggle && settings.autoSnippet) {
             SnippetManager?.updateOverridesAndUi();
         }
@@ -17347,9 +17351,12 @@ declare global {
         // We've still updated the UI etc. above; just not performing any actions.
         if (!settings.masterScriptToggle) { return; }
 
-        // Let user change overrides in very early snippets
+        // Run snippets and apply overrides immediately for this tick
+        // Track if this is the first snippet run (for delaying autoBuild)
+        let snippetsJustInitialized = settings.autoSnippet && !SnippetManager._hasInitialized;
         if (settings.autoSnippet) {
             SnippetManager.runSnippets();
+            SnippetManager.updateOverridesAndUi();
             SnippetManager.clickTriggers();
         }
 
@@ -17405,10 +17412,11 @@ declare global {
         }
         if (!settings.autoTrigger || !autoTrigger()) {
             // Only go to autoResearch and autoBuild if triggers not building anything at this very moment, to ensure they won't steal reasources from triggers
-            if (settings.autoResearch) {
+            // Delay on first tick until snippets have initialized to ensure restrictions are applied
+            if (settings.autoResearch && !snippetsJustInitialized) {
                 autoResearch(); // Called before autoBuild and autoGenetics - knowledge goes to techs first
             }
-            if (settings.autoBuild || settings.autoARPA) {
+            if ((settings.autoBuild || settings.autoARPA) && !snippetsJustInitialized) {
                 autoBuild(); // Called after autoStorage to compensate fluctuations of quantum(caused by previous tick's adjustments) levels before weightings
                 autoBuildSpecial();
             }
