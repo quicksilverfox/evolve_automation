@@ -11726,7 +11726,7 @@ declare global {
                         jobsToAssign = Math.min(jobsToAssign, jobMax[j]);
                         state.maxSpaceMiners = Math.max(state.maxSpaceMiners, Math.min(availableEmployees, job.breakpointEmployees(i, true)));
                     }
-                    if (job === jobs.Entertainer && !haveTech("superstar")) {
+                    if (job === jobs.Entertainer && !haveTech("superstar") && getGovernor() !== "media") {
                         if (jobMax[j] === undefined) {
                             let taxBuffer = (settings.autoTax || haveTask("tax")) && game.global.civic.taxes.tax_rate < poly.taxCap(false) ? 1 : 0;
                             let entertainerMorale = (game.global.tech['theatre'] + traitVal('musical', 0))
@@ -12026,7 +12026,7 @@ declare global {
                 maxMorale += 10 - Math.floor(minTaxRate / 2);
             }
         }
-        if (resources.Money.storageRatio < 0.9) {
+        if (resources.Money.storageRatio < 0.9 && getGovernor() !== "media") {
             maxMorale = Math.min(maxMorale, settings.generalMaximumMorale);
         }
 
@@ -16666,6 +16666,22 @@ declare global {
                 let conflict = getTechConflict(obj);
                 if (conflict) {
                     conflictNotes.push(conflict);
+                }
+            }
+            // Show fanaticism trait for Fanaticism tech
+            if (obj.id === "fanaticism" && game.global.race.gods) {
+                let godsRace = game.races[game.global.race.gods];
+                if (godsRace?.fanaticism) {
+                    let traitName = game.loc("trait_" + godsRace.fanaticism + "_name");
+                    conflictNotes.push(`Grants: <span class="has-text-warning">${traitName}</span>`);
+                }
+            }
+            // Show fanaticism trait for Deify Ancients tech
+            if ((obj.id === "deify" || obj.id === "deify_alt") && game.global.race.old_gods && game.global.race.old_gods !== "none") {
+                let oldGodsRace = game.races[game.global.race.old_gods];
+                if (oldGodsRace?.fanaticism) {
+                    let traitName = game.loc("trait_" + oldGodsRace.fanaticism + "_name");
+                    conflictNotes.push(`Grants: <span class="has-text-warning">${traitName}</span>`);
                 }
             }
         }
