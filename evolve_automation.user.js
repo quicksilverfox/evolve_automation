@@ -7999,6 +7999,7 @@ declare global {
         EvalFn extends 'SettingDefault' ? any :
         EvalFn extends 'SettingCurrent' ? any :
         EvalFn extends 'Eval' ? any :
+        EvalFn extends 'BuildingCost' ? number :
         EvalFn extends 'BuildingUnlocked' ? boolean :
         EvalFn extends 'BuildingClickable' ? boolean :
         EvalFn extends 'BuildingAffordable' ? boolean :
@@ -8029,13 +8030,13 @@ declare global {
         EvalFn extends 'RacePillared' ? boolean :
         EvalFn extends 'RaceGenus' ? boolean :
         EvalFn extends 'MimicGenus' ? boolean :
-        EvalFn extends 'TraitLevel' ? boolean :
+        EvalFn extends 'TraitLevel' ? number :
         EvalFn extends 'ResetType' ? boolean :
         EvalFn extends 'Challenge' ? boolean :
         EvalFn extends 'Universe' ? boolean :
         EvalFn extends 'Government' ? boolean :
         EvalFn extends 'Governor' ? boolean :
-        EvalFn extends 'Queue' ? boolean :
+        EvalFn extends 'Queue' ? number :
         EvalFn extends 'Date' ? number :
         EvalFn extends 'Soldiers' ? number :
         EvalFn extends 'PlanetBiome' ? boolean :
