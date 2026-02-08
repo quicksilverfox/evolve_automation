@@ -212,6 +212,7 @@
             for (let m of KeyManager.click(count)) {
                 vue.add();
             }
+            vue.$forceUpdate();
         }
 
         removeServants(count) {
@@ -225,6 +226,7 @@
             for (let m of KeyManager.click(count)) {
                 vue.sub();
             }
+            vue.$forceUpdate();
         }
 
         isDefault() {
@@ -312,6 +314,7 @@
             for (let m of KeyManager.click(count)) {
                 vue.add(this._originalId);
             }
+            vue.$forceUpdate();
         }
 
         removeServants(count) {
@@ -325,6 +328,7 @@
             for (let m of KeyManager.click(count)) {
                 vue.sub(this._originalId);
             }
+            vue.$forceUpdate();
         }
     }
 
