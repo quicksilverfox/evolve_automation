@@ -2543,71 +2543,67 @@
         };
 
         // Shrine tooltip - shows what type will be built and when phase changes
-        // Track moon phase changes for countdown calculation
-        let shrineMoonTracker = { lastMoon: -1, lastChange: 0 };
-
         let shrineTooltipFn = (obj) => {
             if (!game.global.city?.shrine) return "";
             let moon = game.global.city.calendar.moon;
+            let retrograde = game.global.city.ptrait?.includes('retrograde');
             let lines = [];
 
             // Determine current shrine type and days until next phase
+            // Phase boundaries: 0, 7, 14, 21 are Rotating; 1-6 Morale; 8-13 Metal; 15-20 Knowledge; 22-27 Tax
+            // With retrograde, moon goes backwards so we approach boundaries from opposite direction
             let currentType, daysUntilChange, nextPhase;
             if (moon === 0) {
                 currentType = "Rotating";
                 daysUntilChange = 1;
-                nextPhase = "Morale";
+                nextPhase = retrograde ? "Tax" : "Morale";
             } else if (moon >= 1 && moon <= 6) {
                 currentType = "Morale";
-                daysUntilChange = 7 - moon;
+                daysUntilChange = retrograde ? moon : (7 - moon);
                 nextPhase = "Rotating";
             } else if (moon === 7) {
                 currentType = "Rotating";
                 daysUntilChange = 1;
-                nextPhase = "Metal";
+                nextPhase = retrograde ? "Morale" : "Metal";
             } else if (moon >= 8 && moon <= 13) {
                 currentType = "Metal";
-                daysUntilChange = 14 - moon;
+                daysUntilChange = retrograde ? (moon - 7) : (14 - moon);
                 nextPhase = "Rotating";
             } else if (moon === 14) {
                 currentType = "Rotating";
                 daysUntilChange = 1;
-                nextPhase = "Knowledge";
+                nextPhase = retrograde ? "Metal" : "Knowledge";
             } else if (moon >= 15 && moon <= 20) {
                 currentType = "Knowledge";
-                daysUntilChange = 21 - moon;
+                daysUntilChange = retrograde ? (moon - 14) : (21 - moon);
                 nextPhase = "Rotating";
             } else if (moon === 21) {
                 currentType = "Rotating";
                 daysUntilChange = 1;
-                nextPhase = "Tax";
+                nextPhase = retrograde ? "Knowledge" : "Tax";
             } else { // 22-27
                 currentType = "Tax";
-                daysUntilChange = 28 - moon;
+                daysUntilChange = retrograde ? (moon - 21) : (28 - moon);
                 nextPhase = "Rotating";
             }
 
-            // Calculate real-time milliseconds per game day
-            // Base: 5000ms per game day (250ms * 20 longRatio)
-            let msPerDay = 5000;
+            // Calculate remaining ticks (20 ticks per day)
+            // scriptTick starts at 1, first tick makes it 2, day changes at 21, 41, 61...
+            // So (scriptTick - 1) % 20 gives position within day cycle (0 = start of day)
+            let ticksPerDay = 20;
+            let ticksIntoDay = (state.scriptTick - 1) % ticksPerDay;
+            let remainingTicksInDay = ticksPerDay - ticksIntoDay;
+            let totalRemainingTicks = ((daysUntilChange - 1) * ticksPerDay) + remainingTicksInDay;
+
+            // Convert ticks to real time (250ms per tick base, modified by traits)
+            let msPerTick = 250;
             if (game.global.race['slow']) {
-                msPerDay *= 1 + (game.traits.slow.vars()[0] / 100);
+                msPerTick *= 1 + (game.traits.slow.vars()[0] / 100);
             }
             if (game.global.race['hyper']) {
-                msPerDay *= 1 - (game.traits.hyper.vars()[0] / 100);
+                msPerTick *= 1 - (game.traits.hyper.vars()[0] / 100);
             }
-
-            // Track when moon phase changed to calculate time within current day
-            let now = Date.now();
-            if (moon !== shrineMoonTracker.lastMoon) {
-                shrineMoonTracker.lastMoon = moon;
-                shrineMoonTracker.lastChange = now;
-            }
-
-            // Calculate remaining time: full days + remaining time in current day
-            let elapsedInCurrentDay = now - shrineMoonTracker.lastChange;
-            let remainingInCurrentDay = Math.max(0, msPerDay - elapsedInCurrentDay);
-            let totalRemainingMs = ((daysUntilChange - 1) * msPerDay) + remainingInCurrentDay;
+            let totalRemainingMs = totalRemainingTicks * msPerTick;
 
             // Show what type of shrine will be built
             let typeClass = currentType === "Rotating" ? "has-text-advanced" : "has-text-info";
