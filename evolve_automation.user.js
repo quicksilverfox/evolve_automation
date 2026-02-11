@@ -2541,6 +2541,95 @@
             const diff = ((current - next) * buildings.IsleSpiritVacuum.stateOnCount) * (game.global.race['emfield'] ? 1.5 : 1);
             return `Next level will decrease total consumption by ${getNiceNumber(diff)} MW`;
         };
+
+        // Shrine tooltip - shows what type will be built and when phase changes
+        // Track moon phase changes for countdown calculation
+        let shrineMoonTracker = { lastMoon: -1, lastChange: 0 };
+
+        let shrineTooltipFn = (obj) => {
+            if (!game.global.city?.shrine) return "";
+            let moon = game.global.city.calendar.moon;
+            let lines = [];
+
+            // Determine current shrine type and days until next phase
+            let currentType, daysUntilChange, nextPhase;
+            if (moon === 0) {
+                currentType = "Rotating";
+                daysUntilChange = 1;
+                nextPhase = "Morale";
+            } else if (moon >= 1 && moon <= 6) {
+                currentType = "Morale";
+                daysUntilChange = 7 - moon;
+                nextPhase = "Rotating";
+            } else if (moon === 7) {
+                currentType = "Rotating";
+                daysUntilChange = 1;
+                nextPhase = "Metal";
+            } else if (moon >= 8 && moon <= 13) {
+                currentType = "Metal";
+                daysUntilChange = 14 - moon;
+                nextPhase = "Rotating";
+            } else if (moon === 14) {
+                currentType = "Rotating";
+                daysUntilChange = 1;
+                nextPhase = "Knowledge";
+            } else if (moon >= 15 && moon <= 20) {
+                currentType = "Knowledge";
+                daysUntilChange = 21 - moon;
+                nextPhase = "Rotating";
+            } else if (moon === 21) {
+                currentType = "Rotating";
+                daysUntilChange = 1;
+                nextPhase = "Tax";
+            } else { // 22-27
+                currentType = "Tax";
+                daysUntilChange = 28 - moon;
+                nextPhase = "Rotating";
+            }
+
+            // Calculate real-time milliseconds per game day
+            // Base: 5000ms per game day (250ms * 20 longRatio)
+            let msPerDay = 5000;
+            if (game.global.race['slow']) {
+                msPerDay *= 1 + (game.traits.slow.vars()[0] / 100);
+            }
+            if (game.global.race['hyper']) {
+                msPerDay *= 1 - (game.traits.hyper.vars()[0] / 100);
+            }
+
+            // Track when moon phase changed to calculate time within current day
+            let now = Date.now();
+            if (moon !== shrineMoonTracker.lastMoon) {
+                shrineMoonTracker.lastMoon = moon;
+                shrineMoonTracker.lastChange = now;
+            }
+
+            // Calculate remaining time: full days + remaining time in current day
+            let elapsedInCurrentDay = now - shrineMoonTracker.lastChange;
+            let remainingInCurrentDay = Math.max(0, msPerDay - elapsedInCurrentDay);
+            let totalRemainingMs = ((daysUntilChange - 1) * msPerDay) + remainingInCurrentDay;
+
+            // Show what type of shrine will be built
+            let typeClass = currentType === "Rotating" ? "has-text-advanced" : "has-text-info";
+            lines.push(`Current phase: <span class="${typeClass}">${currentType}</span>`);
+            lines.push(`${nextPhase} phase in ${poly.timeFormat(totalRemainingMs / 1000)}`);
+
+            // Show current shrine counts
+            let shrine = game.global.city.shrine;
+            let counts = [];
+            if (shrine.morale > 0) counts.push(`Morale: ${shrine.morale}`);
+            if (shrine.metal > 0) counts.push(`Metal: ${shrine.metal}`);
+            if (shrine.know > 0) counts.push(`Knowledge: ${shrine.know}`);
+            if (shrine.tax > 0) counts.push(`Tax: ${shrine.tax}`);
+            if (shrine.cycle > 0) counts.push(`Rotating: ${shrine.cycle}`);
+            if (counts.length > 0) {
+                lines.push(counts.join(", "));
+            }
+
+            return lines.join("<br>");
+        };
+        tooltipInfo["city-shrine"] = shrineTooltipFn;
+        tooltipInfo["prtl_wasteland-shrine"] = shrineTooltipFn;
     }
 
     // Helper function for snippets to add tooltips easily
@@ -10453,6 +10542,7 @@ declare global {
             fleetOuterShips: "custom",
             fleetExploreTau: true,
             fleetMaxCover: true,
+            fleetDisableExcess: false,
             fleetEmbassyKnowledge: 6000000,
             fleetAlienGiftKnowledge: 6500000,
             fleetAlien2Knowledge: 8000000,
@@ -15754,8 +15844,26 @@ declare global {
             }
         }
 
-        // Assign remaining ships to gorddon, to utilize Symposium
-        if (buildings.GorddonSymposium.stateOnCount > 0) {
+        // Handle remaining (excess) ships
+        if (settings.fleetDisableExcess) {
+            // Disable excess ships to save fuel, support, and crew
+            let shipBuildings = {
+                scout_ship: buildings.ScoutShip,
+                corvette_ship: buildings.CorvetteShip,
+                frigate_ship: buildings.FrigateShip,
+                cruiser_ship: buildings.CruiserShip,
+                dreadnought: buildings.Dreadnought
+            };
+            allFleets.forEach(ship => {
+                if (ship.count > 0) {
+                    let building = shipBuildings[ship.name];
+                    if (building) {
+                        building.tryAdjustState(-ship.count);
+                    }
+                }
+            });
+        } else if (buildings.GorddonSymposium.stateOnCount > 0) {
+            // Assign remaining ships to Gorddon to utilize Symposium
             allFleets.forEach(ship => allRegions[2].assigned[ship.name] += ship.count);
         }
 
@@ -20518,6 +20626,7 @@ declare global {
     function updateFleetAndromeda(currentNode, secondaryPrefix) {
         addStandardHeading(currentNode, "Andromeda");
         addSettingsToggle(currentNode, "fleetMaxCover", "Maximize protection of prioritized systems", "Adjusts ships distribution to fully supress piracy in prioritized regions. Some potential defense will be wasted, as it will use big ships to cover small holes, when it doesn't have anything fitting better. This option is not required: all your dreadnoughts still will be used even without this option.");
+        addSettingsToggle(currentNode, "fleetDisableExcess", "Disable excess ships", "Turn off excess ships instead of assigning them to Gorddon. Saves Helium-3 fuel, gateway support, and crew. Excess ships are those not needed to cover piracy in any region.");
         addSettingsNumber(currentNode, "fleetEmbassyKnowledge", "Minimum knowledge for Embassy", "Building Embassy increases maximum piracy up to 100, script won't Auto Build it until this knowledge cap is reached.");
         addSettingsNumber(currentNode, "fleetAlienGiftKnowledge", "Minimum knowledge for Alien Gift", "Researching Alien Gift increases maximum piracy up to 250, script won't Auto Research it until this knowledge cap is reached.");
         addSettingsNumber(currentNode, "fleetAlien2Knowledge", "Minimum knowledge for Alien 2 Assault", "Assaulting Alien 2 increases maximum piracy up to 500, script won't do it until this knowledge cap is reached. Regardless of set value it won't ever try to assault until you have big enough fleet to do it without loses.");
