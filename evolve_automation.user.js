@@ -3832,6 +3832,13 @@
           () => "Still have some non operating buildings",
           () => settings.buildingWeightingNonOperating
       ],[
+          () => settings.autoFleet && settings.fleetDisableExcess,
+          (building) => building.is.ship &&
+                        FleetManager.neededFleetShips[building._vueBinding] !== undefined &&
+                        building.count >= FleetManager.neededFleetShips[building._vueBinding],
+          () => "Fleet has enough ships",
+          () => 0
+      ],[
           () => settings.prestigeType !== "bioseed" || !isGECKNeeded(),
           (building) => building === buildings.GasSpaceDockGECK,
           () => "Max allowed amount of G.E.C.K reached",
@@ -6391,6 +6398,7 @@
     var FleetManager = {
         _fleetVueBinding: "fleet",
         _fleetVue: undefined,
+        neededFleetShips: {},
 
         initFleet() {
             if (!game.global.tech.piracy) {
@@ -12151,8 +12159,8 @@ declare global {
                                 jobsToAssign = 0;
                             }
                             if (game.global.race['witch_hunter']) {
-                                let SusPerWiz = game.global.civic.govern.type === 'magocracy' ? 0.5 : 1;
-                                jobMax[j] = ((99 - resources.Sus.currentQuantity) / SusPerWiz) + (job.count * SusPerWiz);
+                                let SusPerWiz = (game.global.civic.govern.type === 'magocracy' ? 0.5 : 1) * traitVal('high_pop', 1, '=');
+                                jobMax[j] = Math.floor((98 - resources.Sus.currentQuantity) / SusPerWiz) + job.count;
                             }
                         }
                         jobsToAssign = Math.min(jobsToAssign, jobMax[j]);
@@ -14385,6 +14393,11 @@ declare global {
             if (!game.global.settings.showGalactic && building._tab === "galaxy") {
                 maxStateOn = 0;
             }
+            // Skip fleet ships managed by autoFleet when fleetDisableExcess is on
+            if (settings.autoFleet && settings.fleetDisableExcess &&
+                FleetManager.neededFleetShips[building._vueBinding] !== undefined) {
+                continue;
+            }
             if (settings.buildingsLimitPowered) {
                 maxStateOn = Math.min(maxStateOn, building.autoMax);
             }
@@ -15642,6 +15655,7 @@ declare global {
 
     function autoFleet() {
         if (!FleetManager.initFleet()) {
+            FleetManager.neededFleetShips = {};
             return;
         }
         let def = game.global.galaxy.defense;
@@ -15674,6 +15688,9 @@ declare global {
         // We can't rely on stateOnCount - it won't give us correct number of ships of some of them missing crew
         let fleetIndex = Object.fromEntries(allFleets.map((ship, index) => [ship.name, index]));
         Object.values(def).forEach(assigned => Object.entries(assigned).forEach(([ship, count]) => allFleets[fleetIndex[ship]].count += Math.floor(count)));
+
+        // Save original ship counts before allocation for neededFleetShips calculation
+        let originalFleetCounts = allFleets.map(ship => ship.count);
 
         // Check if we can perform assault mission
         let assault = null;
@@ -15741,6 +15758,7 @@ declare global {
             // Assign to target region
             allFleets.forEach((ship, idx) => FleetManager.addShip(assault.region, ship.name, assault.ships[idx]));
             assault.mission.click();
+            FleetManager.neededFleetShips = {};
             return; // We're done for now; lot of data was invalidated during attack, we'll manage remaining ships in next tick
         }
 
@@ -15838,6 +15856,26 @@ declare global {
                     }
                 }
             }
+        }
+
+        // Compute needed ship counts for autoBuild weighting
+        if (settings.fleetDisableExcess) {
+            let shipBuildings = {
+                scout_ship: buildings.ScoutShip,
+                corvette_ship: buildings.CorvetteShip,
+                frigate_ship: buildings.FrigateShip,
+                cruiser_ship: buildings.CruiserShip,
+                dreadnought: buildings.Dreadnought
+            };
+            FleetManager.neededFleetShips = {};
+            allFleets.forEach((ship, idx) => {
+                let building = shipBuildings[ship.name];
+                if (building) {
+                    FleetManager.neededFleetShips[building._vueBinding] = originalFleetCounts[idx] - ship.count;
+                }
+            });
+        } else {
+            FleetManager.neededFleetShips = {};
         }
 
         // Handle remaining (excess) ships
