@@ -12160,7 +12160,8 @@ declare global {
                             }
                             if (game.global.race['witch_hunter']) {
                                 let SusPerWiz = (game.global.civic.govern.type === 'magocracy' ? 0.5 : 1) * traitVal('high_pop', 1, '=');
-                                jobMax[j] = Math.floor((98 - resources.Sus.currentQuantity) / SusPerWiz) + job.count;
+                                let priestEffect = haveTech("roguemagic", 2) ? traitVal('high_pop', 1, '=') : 0;
+                                jobMax[j] = Math.floor((99 - resources.Sus.currentQuantity) / (SusPerWiz + priestEffect)) + job.count;
                             }
                         }
                         jobsToAssign = Math.min(jobsToAssign, jobMax[j]);
