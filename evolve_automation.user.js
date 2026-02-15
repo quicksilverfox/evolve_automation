@@ -12159,9 +12159,15 @@ declare global {
                                 jobsToAssign = 0;
                             }
                             if (game.global.race['witch_hunter']) {
-                                let SusPerWiz = (game.global.civic.govern.type === 'magocracy' ? 0.5 : 1) * traitVal('high_pop', 1, '=');
-                                let priestEffect = haveTech("roguemagic", 2) ? traitVal('high_pop', 1, '=') : 0;
-                                jobMax[j] = Math.floor((99 - resources.Sus.currentQuantity) / (SusPerWiz + priestEffect)) + job.count;
+                                let susNow = resources.Sus.currentQuantity;
+                                if (susNow >= 100) {
+                                    let SusPerWiz = (game.global.civic.govern.type === 'magocracy' ? 0.5 : 1) * traitVal('high_pop', 1, '=');
+                                    jobMax[j] = Math.floor((99 - susNow) / SusPerWiz) + job.count;
+                                } else if (susNow < 96) {
+                                    jobMax[j] = job.count + 1;
+                                } else {
+                                    jobMax[j] = job.count;
+                                }
                             }
                         }
                         jobsToAssign = Math.min(jobsToAssign, jobMax[j]);
@@ -14394,10 +14400,10 @@ declare global {
             if (!game.global.settings.showGalactic && building._tab === "galaxy") {
                 maxStateOn = 0;
             }
-            // Skip fleet ships managed by autoFleet when fleetDisableExcess is on
+            // Cap fleet ships to needed count when fleetDisableExcess is on
             if (settings.autoFleet && settings.fleetDisableExcess &&
                 FleetManager.neededFleetShips[building._vueBinding] !== undefined) {
-                continue;
+                maxStateOn = Math.min(maxStateOn, FleetManager.neededFleetShips[building._vueBinding]);
             }
             if (settings.buildingsLimitPowered) {
                 maxStateOn = Math.min(maxStateOn, building.autoMax);
@@ -15871,7 +15877,7 @@ declare global {
             FleetManager.neededFleetShips = {};
             allFleets.forEach((ship, idx) => {
                 let building = shipBuildings[ship.name];
-                if (building) {
+                if (building && ship.count > 0) {
                     FleetManager.neededFleetShips[building._vueBinding] = originalFleetCounts[idx] - ship.count;
                 }
             });
