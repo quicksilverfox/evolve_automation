@@ -5555,6 +5555,7 @@
         hellPatrolSize: 0,
         hellAssigned: 0,
         hellReservedSoldiers: 0,
+        maxGuardPosts: -1,
 
         // Warlord properties
         minions: 0,
@@ -5698,9 +5699,9 @@
                 soldiers += soulForgeSoldiers;
             }
 
-            // Guardposts need at least one soldier free so lets just always keep one handy
+            // Reserve soldiers for active guard posts
             if (buildings.RuinsGuardPost.count > 0) {
-                soldiers += (buildings.RuinsGuardPost.stateOnCount + 1) * traitVal('high_pop', 0, 1);
+                soldiers += buildings.RuinsGuardPost.stateOnCount * traitVal('high_pop', 0, 1);
             }
             return soldiers;
         },
@@ -11649,6 +11650,8 @@ declare global {
             return;
         }
 
+        m.maxGuardPosts = -1;
+
         if (game.global.race['warlord']) {
 
             let enemies = m.enemies;
@@ -11681,6 +11684,32 @@ declare global {
             targetHellSoldiers = Math.min(m.currentSoldiers, m.maxSoldiers) - homeSoldiers; // Leftovers from an incomplete patrol go to hell garrison
             let availableHellSoldiers = targetHellSoldiers - m.hellReservedSoldiers;
 
+            // Pre-compute guard post reservation so hellGarrison sees a stable soldier count.
+            // Without this, changing guard posts alters availableHellSoldiers, which can push
+            // hellGarrison across a threshold, changing patrol budget, changing maxGuardPosts,
+            // causing oscillation.
+            let guardPostDeficit = 0;
+            if (settings.autoPower && buildings.RuinsGuardPost.count > 0 && isHellSupressUseful()) {
+                let gpMax = buildings.RuinsGuardPost.count;
+                let hasGate = haveTech('hell_gate');
+                let targetGP = gpMax;
+                for (let n = 1; n <= gpMax; n++) {
+                    let ok = poly.hellSupression("ruins", n).supress >= 1;
+                    if (hasGate) {
+                        ok = ok && poly.hellSupression("gate", n).supress >= 1;
+                    }
+                    if (ok) {
+                        targetGP = n;
+                        break;
+                    }
+                }
+                guardPostDeficit = Math.max(0, targetGP - buildings.RuinsGuardPost.stateOnCount) * traitVal('high_pop', 0, 1);
+            }
+            // Soldiers available for fortress defense and patrols (after guard post reservation).
+            // This value is stable: targetHellSoldiers - forge - targetGP*hp, independent of
+            // current guard post stateOnCount (when stateOnCount <= targetGP).
+            let availableForDefenseAndPatrols = availableHellSoldiers - guardPostDeficit;
+
             // Determine target hell garrison size
             // Estimated average damage is roughly 35 * threat / defense, so required defense = 35 * threat / targetDamage
             // But the threat hitting the fortress is only an intermediate result in the bloodwar calculation, it happens after predators and patrols but before repopulation,
@@ -11693,11 +11722,14 @@ declare global {
             let hellGarrison = m.getSoldiersForAttackRating(Math.max(0, hellWallsMulti * hellTargetFortressDamage - hellTurretPower)); // don't go below 0
 
             // Always have at least half our hell contingent available for patrols, and if we cant defend properly just send everyone
-            if (availableHellSoldiers < hellGarrison) {
+            if (availableForDefenseAndPatrols < hellGarrison) {
                 hellGarrison = 0; // If we cant defend adequately, send everyone out on patrol
-            } else if (availableHellSoldiers < hellGarrison * 2) {
-                hellGarrison = Math.floor(availableHellSoldiers / 2); // Always try to send out at least half our people
+            } else if (availableForDefenseAndPatrols < hellGarrison * 2) {
+                hellGarrison = Math.floor(availableForDefenseAndPatrols / 2); // Always try to send out at least half our people
             }
+
+            // Patrol budget: defense+patrol pool minus fortress defense
+            let patrolBudget = availableForDefenseAndPatrols - hellGarrison;
 
             // Determine the patrol attack rating
             if (settings.hellHandlePatrolSize) {
@@ -11733,31 +11765,116 @@ declare global {
                 // Patrol size
                 targetHellPatrolSize = m.getSoldiersForAttackRating(patrolRating);
 
+                // Prevent patrol size oscillation from rounding and hivemind non-linearity.
+                // For hivemind, armyRating(val) = val * base * (0.5 + 0.05*val) is quadratic
+                // below hiveSize, so getSoldiersForAttackRating's linear estimate (sampled at 10
+                // soldiers) diverges from reality at small patrol sizes. The while-loop correction
+                // uses strict >, creating off-by-1 at exact boundaries. Together these cause the
+                // computed target to flip between N and N+1 when patrolRating is near a boundary.
+                // Fix: use actual armyRating of the current patrol size to decide changes.
+                // Only increase when current patrols genuinely can't meet the rating.
+                // Only decrease when one size smaller provably still meets it.
+                if (m.hellPatrolSize > 0 && targetHellPatrolSize !== m.hellPatrolSize) {
+                    let currentRating = game.armyRating(m.hellPatrolSize, "army", 0);
+                    if (currentRating >= patrolRating) {
+                        // Current size meets the patrol rating
+                        if (targetHellPatrolSize < m.hellPatrolSize) {
+                            // Decrease: only if one size smaller still meets the rating
+                            let smallerRating = game.armyRating(m.hellPatrolSize - 1, "army", 0);
+                            if (smallerRating >= patrolRating) {
+                                targetHellPatrolSize = m.hellPatrolSize - 1;
+                            } else {
+                                targetHellPatrolSize = m.hellPatrolSize;
+                            }
+                        } else {
+                            // Increase requested but current already sufficient
+                            targetHellPatrolSize = m.hellPatrolSize;
+                        }
+                    }
+                    // else: current size insufficient — allow the computed increase
+                }
+
                 // If patrol size is larger than available soldiers, send everyone available instead of 0
-                targetHellPatrolSize = Math.min(targetHellPatrolSize, availableHellSoldiers - hellGarrison);
+                targetHellPatrolSize = Math.min(targetHellPatrolSize, patrolBudget);
             } else {
                 targetHellPatrolSize = m.hellPatrolSize;
             }
 
             // Determine patrol count
-            targetHellPatrols = Math.max(1, Math.floor((availableHellSoldiers - hellGarrison) / targetHellPatrolSize));
+            if (targetHellPatrolSize <= 0) {
+                // Not enough soldiers for patrols after guard post reservation
+                targetHellPatrolSize = m.hellPatrolSize || 1;
+                targetHellPatrols = 0;
+            } else {
+                targetHellPatrols = Math.max(1, Math.floor(patrolBudget / targetHellPatrolSize));
 
-            // Special logic for small number of patrols
-            if (settings.hellHandlePatrolSize && targetHellPatrols === 1) {
-                // If we could send 1.5 patrols, send 3 half-size ones instead
-                if ((availableHellSoldiers - hellGarrison) >= 1.5 * targetHellPatrolSize) {
-                    targetHellPatrolSize = Math.floor((availableHellSoldiers - hellGarrison) / 3);
-                    targetHellPatrols = Math.floor((availableHellSoldiers - hellGarrison) / targetHellPatrolSize);
+                // Special logic for small number of patrols
+                if (settings.hellHandlePatrolSize && targetHellPatrols === 1) {
+                    // If we could send 1.5 patrols, send 3 half-size ones instead
+                    if (patrolBudget >= 1.5 * targetHellPatrolSize) {
+                        targetHellPatrolSize = Math.floor(patrolBudget / 3);
+                        targetHellPatrols = Math.floor(patrolBudget / targetHellPatrolSize);
+                    }
                 }
             }
         } else {
             // Try to leave hell if any soldiers are still assigned so the game doesn't put miniscule amounts of soldiers back
+            m.maxGuardPosts = 0;
             if (m.hellAssigned > 0) {
                 m.removeHellPatrolSize(m.hellPatrolSize);
                 m.removeHellPatrol(m.hellPatrols);
                 m.removeHellGarrison(m.hellSoldiers);
                 return;
             }
+        }
+
+        // Compute max guard posts autoPower should enable, based on autoHell's own target allocation.
+        // This ensures autoPower and autoHell agree on soldier distribution, preventing oscillation.
+        if (settings.autoPower && buildings.RuinsGuardPost.count > 0 && isHellSupressUseful()) {
+            let hp = traitVal('high_pop', 0, 1);
+            // Army available for guard posts = total hell soldiers - patrols - forge
+            let gpArmy = targetHellSoldiers - targetHellPatrols * targetHellPatrolSize;
+            // Subtract forge soldiers WITH gun emplacement credit (same as hellReservedSoldiers).
+            // Must match hellReservedSoldiers' estimate so the patrol budget and maxGuardPosts
+            // agree on how many soldiers are allocated. Using stateOnCount for gun credit may
+            // overestimate when power is constrained (stateOnCount > p_on), causing the game's
+            // guard_post check to briefly disable some posts. This self-corrects next tick as
+            // stateOnCount drops and the script rebalances.
+            if (buildings.PitSoulForge.count > 0 && (buildings.PitSoulForge.autoStateEnabled || buildings.PitSoulForge.stateOnCount > 0)) {
+                let soldierRating = game.armyRating(1, "hellArmy");
+                if (soldierRating > 0) {
+                    let base = game.global.race['warlord'] ? 400 : 650;
+                    let forgeSoldiers = Math.ceil(base / soldierRating);
+                    if (buildings.PitGunEmplacement.count > 0) {
+                        let soldiersPerGun = game.global.tech.hell_gun >= 2 ? 2 : 1;
+                        soldiersPerGun *= traitVal('high_pop', 0, 1);
+                        forgeSoldiers -= buildings.PitGunEmplacement.stateOnCount * soldiersPerGun;
+                        forgeSoldiers = Math.max(0, forgeSoldiers);
+                    }
+                    if (forgeSoldiers <= gpArmy) {
+                        gpArmy -= forgeSoldiers;
+                    }
+                }
+            }
+            let gpFromArmy = hp > 0 ? Math.floor(gpArmy / hp) : 0;
+            // Also cap at minimum needed for 100% suppression
+            let gpMax = buildings.RuinsGuardPost.count;
+            let hasGate = haveTech('hell_gate');
+            let targetGP = gpMax;
+            for (let n = 1; n <= gpMax; n++) {
+                let ok = poly.hellSupression("ruins", n).supress >= 1;
+                if (hasGate) {
+                    ok = ok && poly.hellSupression("gate", n).supress >= 1;
+                }
+                if (ok) {
+                    targetGP = n;
+                    break;
+                }
+            }
+            m.maxGuardPosts = Math.min(targetGP, gpFromArmy);
+        } else if (buildings.RuinsGuardPost.count > 0) {
+            // Guard posts exist but suppression isn't useful - disable all
+            m.maxGuardPosts = 0;
         }
 
         // Adjust values ingame
@@ -14568,38 +14685,17 @@ declare global {
                         maxStateOn = Math.min(maxStateOn, currentStateOn + Math.ceil(mineAdjust));
                     }
                 }
-                // Disable useless Guard Post
+                // Disable useless Guard Post - use maxGuardPosts computed by autoHell
+                // to ensure both functions agree on soldier allocation and avoid oscillation.
+                // maxGuardPosts is already the minimum for 100% suppression (both ruins and gate),
+                // capped by what the army can support (using conservative forge estimate).
                 if (building === buildings.RuinsGuardPost) {
-                    if (isHellSupressUseful()) {
-                        let dominated = poly.hellSupression("ruins").supress >= 1;
-                        if (haveTech('hell_gate')) {
-                            dominated = dominated && poly.hellSupression("gate").supress >= 1;
-                        }
-                        // Check if we can safely reduce by 1 (would still have 100% suppression)
-                        let canReduce = currentStateOn > 0 && poly.hellSupression("ruins", currentStateOn - 1).supress >= 1;
-                        if (canReduce && haveTech('hell_gate')) {
-                            canReduce = poly.hellSupression("gate", currentStateOn - 1).supress >= 1;
-                        }
-                        if (!dominated) {
-                            // Under 100%, increase by 1 if we have enough soldiers in hell garrison
-                            // hellGarrison accounts for patrols and reserved soldiers (including guard post buffer)
-                            // If negative, we're overextended and shouldn't enable more posts (prevents oscillation)
-                            if (WarManager.hellGarrison >= 0) {
-                                maxStateOn = Math.min(maxStateOn, currentStateOn + 1);
-                            } else {
-                                // Not enough soldiers, maintain current state
-                                maxStateOn = Math.min(maxStateOn, currentStateOn);
-                            }
-                        } else if (canReduce) {
-                            // Can safely reduce by 1 and still maintain 100%
-                            maxStateOn = Math.min(maxStateOn, currentStateOn - 1);
-                        } else {
-                            // At 100% but can't reduce without going under
-                            maxStateOn = Math.min(maxStateOn, currentStateOn);
-                        }
-                    } else {
+                    if (WarManager.maxGuardPosts >= 0) {
+                        maxStateOn = Math.min(maxStateOn, WarManager.maxGuardPosts);
+                    } else if (!isHellSupressUseful()) {
                         maxStateOn = 0;
                     }
+                    // else: maxGuardPosts == -1 means autoHell didn't run yet - leave maxStateOn alone
                 }
                 // Disable Waygate once it cleared, or if we're going to use bomb, or current potential is too hight
                 if (building === buildings.SpireWaygate && (haveTech("waygate", 3)
