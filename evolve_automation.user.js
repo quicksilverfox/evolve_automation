@@ -3540,25 +3540,38 @@
                       if (building === buildings.LakeTransport && nextTransport < nextBireme) {
                           return buildings.LakeBireme;
                       }
-                  } else if (settings.buildingsTransportUpgrade && biremeCount > optimalBiremes) {
-                      // No spare support but have excess biremes - upgrade mode (power code will disable one)
-                      if (building === buildings.LakeBireme) {
-                          if (resources.Soul_Gem.currentQuantity >= buildings.LakeTransport.cost["Soul_Gem"]) {
+                  } else {
+                      // No spare support - check if upgrade is needed (matching autoPower upgrade logic)
+                      let upgrading = false;
+                      if (settings.buildingsTransportUpgrade) {
+                          let lakeSupport = resources.Lake_Support.maxQuantity;
+                          let effectiveFleet = Math.min(total, lakeSupport);
+                          let optBiremes = 0;
+                          let bestSup = 0;
+                          for (let b = 0; b <= effectiveFleet; b++) {
+                              let sup = (1 - rating ** b) * ((effectiveFleet - b) * 5);
+                              if (sup > bestSup) { bestSup = sup; optBiremes = b; }
+                          }
+                          if (transportCount < effectiveFleet - optBiremes && building === buildings.LakeBireme) {
+                              upgrading = true;
+                              if (resources.Soul_Gem.currentQuantity >= buildings.LakeTransport.cost["Soul_Gem"]) {
+                                  return buildings.LakeTransport;
+                              }
+                              building._calcWeighting = 0;
+                              building.extraDescription += "Waiting for Soul Gems to upgrade to Transport<br>";
+                          }
+                      }
+                      // Per-supply optimization fallback - redirect suboptimal ship to better one
+                      if (!upgrading) {
+                          let currentSupply = (1 - (rating ** biremeCount)) * (transportCount * 5);
+                          let marginalBireme = (1 - (rating ** (biremeCount + 1))) * (transportCount * 5) - currentSupply;
+                          let marginalTransport = (1 - (rating ** biremeCount)) * ((transportCount + 1) * 5) - currentSupply;
+                          if (building === buildings.LakeBireme && marginalBireme < marginalTransport) {
                               return buildings.LakeTransport;
                           }
-                          building._calcWeighting = 0;
-                          building.extraDescription += "Waiting for Soul Gems to upgrade to Transport<br>";
-                      }
-                  } else {
-                      // No spare support - use per-supply optimization, a fallback for disabled buildingConsumptionCheck
-                      let currentSupply = (1 - (rating ** biremeCount)) * (transportCount * 5);
-                      let marginalBireme = (1 - (rating ** (biremeCount + 1))) * (transportCount * 5) - currentSupply;
-                      let marginalTransport = (1 - (rating ** biremeCount)) * ((transportCount + 1) * 5) - currentSupply;
-                      if (building === buildings.LakeBireme && marginalBireme < marginalTransport) {
-                          return buildings.LakeTransport;
-                      }
-                      if (building === buildings.LakeTransport && marginalTransport < marginalBireme) {
-                          return buildings.LakeBireme;
+                          if (building === buildings.LakeTransport && marginalTransport < marginalBireme) {
+                              return buildings.LakeBireme;
+                          }
                       }
                   }
               }
@@ -6640,8 +6653,11 @@
 
         getPreferredSize() {
             let mechBay = game.global.portal.mechbay;
-            if (settings.mechFillBay && mechBay.max % 1 === 0 && (game.global.blood.prepared >= 2 ? mechBay.bay % 2 !== mechBay.max % 2 : mechBay.max - mechBay.bay === 1)) {
-                return ['collector', true]; // One collector to fill odd bay
+            if (settings.mechFillBay && mechBay.max - mechBay.bay === 1) {
+                let collectorsCount = this.activeMechs.filter(mech => mech.size === 'collector').length;
+                if (collectorsCount < Math.floor(mechBay.max * settings.mechMaxCollectors)) {
+                    return ['collector', true]; // One collector to fill last odd bay slot
+                }
             }
 
             if (resources.Supply.storageRatio < 0.9 && resources.Supply.rateOfChange < settings.mechMinSupply) {
@@ -14952,23 +14968,25 @@ declare global {
             let transportCount = transport.count;
             let total = biremeCount + transportCount;
 
-            // Calculate optimal bireme count for current total
+            // Calculate optimal bireme count for effective fleet (capped at available support)
+            let effectiveFleet = Math.min(total, lakeSupport);
             let optimalBiremes = 0;
             let bestSupply = 0;
-            for (let b = 0; b <= total; b++) {
-                let supply = (1 - rating ** b) * ((total - b) * 5);
+            for (let b = 0; b <= effectiveFleet; b++) {
+                let supply = (1 - rating ** b) * ((effectiveFleet - b) * 5);
                 if (supply > bestSupply) {
                     bestSupply = supply;
                     optimalBiremes = b;
                 }
             }
 
-            // If excess biremes and transport is buildable with enough soul gems, free just 1 support
-            if (settings.buildingsTransportUpgrade && biremeCount > optimalBiremes &&
+            // If fewer transports than optimal, free 1 bireme support slot so autoBuild can build a transport.
+            // Uses effective fleet (not total built) so overcapacity ships don't inflate the target.
+            if (settings.buildingsTransportUpgrade && transportCount < effectiveFleet - optimalBiremes &&
                 transport.isAutoBuildable() && transport.isAffordable(true) &&
                 resources.Soul_Gem.currentQuantity >= transport.cost["Soul_Gem"]) {
                 biremeCount = bireme.stateOnCount - 1;
-                bireme.extraDescription += `Upgrading: Disabling 1 to build Transport (${bireme.count}→${optimalBiremes} optimal)<br>`;
+                bireme.extraDescription += `Upgrading: Disabling 1 to build Transport (${transportCount}→${effectiveFleet - optimalBiremes} optimal)<br>`;
             }
 
             // Handle over-capacity
@@ -15961,7 +15979,7 @@ declare global {
             }
         }
 
-        // Compute needed ship counts for autoBuild weighting
+        // Compute needed ship counts for autoBuild weighting and autoPower capping
         if (settings.fleetDisableExcess) {
             let shipBuildings = {
                 scout_ship: buildings.ScoutShip,
@@ -15970,35 +15988,31 @@ declare global {
                 cruiser_ship: buildings.CruiserShip,
                 dreadnought: buildings.Dreadnought
             };
+            // Check if piracy is still unmet after allocation
+            let unmetPiracy = regionsToProtect.some(region => {
+                let assignedPower = region.armada + Object.entries(region.assigned).reduce((sum, [ship, count]) =>
+                    sum + count * allFleets[fleetIndex[ship]].power, 0);
+                return region.piracy - assignedPower > 0;
+            });
             FleetManager.neededFleetShips = {};
             allFleets.forEach((ship, idx) => {
                 let building = shipBuildings[ship.name];
-                if (building && ship.count > 0) {
-                    FleetManager.neededFleetShips[building._vueBinding] = originalFleetCounts[idx] - ship.count;
+                if (building) {
+                    if (ship.count === 0 && unmetPiracy) {
+                        // All ships of this type allocated but piracy still unmet — don't cap,
+                        // let autoPower turn on more powered-off ships if available
+                    } else {
+                        FleetManager.neededFleetShips[building._vueBinding] = originalFleetCounts[idx] - ship.count;
+                    }
                 }
             });
         } else {
             FleetManager.neededFleetShips = {};
         }
 
-        // Handle remaining (excess) ships
+        // Handle remaining (excess) ships — autoPower will cap power based on neededFleetShips
         if (settings.fleetDisableExcess) {
-            // Disable excess ships to save fuel, support, and crew
-            let shipBuildings = {
-                scout_ship: buildings.ScoutShip,
-                corvette_ship: buildings.CorvetteShip,
-                frigate_ship: buildings.FrigateShip,
-                cruiser_ship: buildings.CruiserShip,
-                dreadnought: buildings.Dreadnought
-            };
-            allFleets.forEach(ship => {
-                if (ship.count > 0) {
-                    let building = shipBuildings[ship.name];
-                    if (building) {
-                        building.tryAdjustState(-ship.count);
-                    }
-                }
-            });
+            // Excess ships not assigned to any region; autoPower handles powering them off
         } else if (buildings.GorddonSymposium.stateOnCount > 0) {
             // Assign remaining ships to Gorddon to utilize Symposium
             allFleets.forEach(ship => allRegions[2].assigned[ship.name] += ship.count);
@@ -16146,7 +16160,15 @@ declare global {
             // Protect titan mechs on Eden patrol duty (titan is most space-efficient for Eden due to +10% boss bonus and 4 weapons)
             let patrolMechs = settings.mechOptimizeEden && game.global.eden?.mech_station?.count >= 10 ? (game.global.eden.mech_station.mechs ?? 0) : 0;
 
+            // Allow scrapping excess collectors even if they're optimal
+            let collectorsCount = m.activeMechs.filter(mech => mech.size === 'collector').length;
+            let excessCollectors = Math.max(0, collectorsCount - Math.floor(mechBay.max * settings.mechMaxCollectors));
+
             let badMechList = m.activeMechs.filter(mech => {
+                if (mech.size === 'collector' && excessCollectors > 0) {
+                    excessCollectors--;
+                    return true;
+                }
                 if ((mech.infernal && mech.size !== 'collector') || mech.power >= m.bestMech[mech.size].power) {
                     return false;
                 }
