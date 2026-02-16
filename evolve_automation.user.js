@@ -15815,7 +15815,9 @@ declare global {
 
         // Check if we can perform assault mission
         let assault = null;
+        let assaultAvailable = false;
         if (buildings.ChthonianMission.isUnlocked() && settings.fleetChthonianLoses !== "ignore") {
+            assaultAvailable = true;
             let fleetReq, fleetWreck;
             if (settings.fleetChthonianLoses === "low") {
                 fleetReq = 4500;
@@ -15860,6 +15862,7 @@ declare global {
                 }
             }
         } else if (buildings.Alien2Mission.isUnlocked() && resources.Knowledge.maxQuantity >= settings.fleetAlien2Knowledge) {
+            assaultAvailable = true;
             let totalPower = allFleets.reduce((sum, ship) => sum + (ship.power * ship.count), 0);
 
             let doAlien2Assault = false;
@@ -15980,7 +15983,7 @@ declare global {
         }
 
         // Compute needed ship counts for autoBuild weighting and autoPower capping
-        if (settings.fleetDisableExcess) {
+        if (settings.fleetDisableExcess && !assaultAvailable) {
             let shipBuildings = {
                 scout_ship: buildings.ScoutShip,
                 corvette_ship: buildings.CorvetteShip,
@@ -16011,7 +16014,7 @@ declare global {
         }
 
         // Handle remaining (excess) ships — autoPower will cap power based on neededFleetShips
-        if (settings.fleetDisableExcess) {
+        if (settings.fleetDisableExcess && !assaultAvailable) {
             // Excess ships not assigned to any region; autoPower handles powering them off
         } else if (buildings.GorddonSymposium.stateOnCount > 0) {
             // Assign remaining ships to Gorddon to utilize Symposium
@@ -20792,7 +20795,7 @@ declare global {
     function updateFleetAndromeda(currentNode, secondaryPrefix) {
         addStandardHeading(currentNode, "Andromeda");
         addSettingsToggle(currentNode, "fleetMaxCover", "Maximize protection of prioritized systems", "Adjusts ships distribution to fully supress piracy in prioritized regions. Some potential defense will be wasted, as it will use big ships to cover small holes, when it doesn't have anything fitting better. This option is not required: all your dreadnoughts still will be used even without this option.");
-        addSettingsToggle(currentNode, "fleetDisableExcess", "Disable excess ships", "Turn off excess ships instead of assigning them to Gorddon. Saves Helium-3 fuel, gateway support, and crew. Excess ships are those not needed to cover piracy in any region.");
+        addSettingsToggle(currentNode, "fleetDisableExcess", "Disable excess ships", "Turn off excess ships instead of assigning them to Gorddon. Saves Helium-3 fuel, gateway support, and crew. Excess ships are those not needed to cover piracy in any region. Ignored when assault missions are available.");
         addSettingsNumber(currentNode, "fleetEmbassyKnowledge", "Minimum knowledge for Embassy", "Building Embassy increases maximum piracy up to 100, script won't Auto Build it until this knowledge cap is reached.");
         addSettingsNumber(currentNode, "fleetAlienGiftKnowledge", "Minimum knowledge for Alien Gift", "Researching Alien Gift increases maximum piracy up to 250, script won't Auto Research it until this knowledge cap is reached.");
         addSettingsNumber(currentNode, "fleetAlien2Knowledge", "Minimum knowledge for Alien 2 Assault", "Assaulting Alien 2 increases maximum piracy up to 500, script won't do it until this knowledge cap is reached. Regardless of set value it won't ever try to assault until you have big enough fleet to do it without loses.");
