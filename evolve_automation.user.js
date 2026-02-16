@@ -19390,7 +19390,7 @@ declare global {
                     outline: none;
                 }
                 .script-sliderbar .range-label {
-                    font-size: 11px;
+                    font-size: 13px;
                     min-width: 95px;
                     white-space: nowrap;
                 }
@@ -19413,7 +19413,14 @@ declare global {
               <span class="range-label right">${maxLabel}: <span class="range-max-display">${100 - maxVal}</span>%</span>
             </div>
           </div>`)
+        .toggleClass('inactive-row', Boolean(settingsRaw.overrides[settingNameMin] || settingsRaw.overrides[settingNameMax]))
         .appendTo(node);
+
+        // Ctrl+Click on range labels opens override modal for respective setting
+        container.find('.range-label').first()
+            .on('click', {label: `${minLabel} (${labelText}) (${settingNameMin})`, name: settingNameMin, type: "number"}, openOverrideModal);
+        container.find('.range-label.right')
+            .on('click', {label: `${maxLabel} (${labelText}) (${settingNameMax})`, name: settingNameMax, type: "number"}, openOverrideModal);
 
         let sliderEl = container.find(`.script_range_slider_${settingNameMin}`);
 
