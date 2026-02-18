@@ -18488,9 +18488,9 @@ declare global {
                     content.style.display = "none";
 
                     let search = content.getElementsByClassName("script-searchsettings");
-                    if (search.length > 0) {
-                        search[0].value = "";
-                        filterBuildingSettingsTable();
+                    for (let s = 0; s < search.length; s++) {
+                        search[s].value = "";
+                        search[s].dispatchEvent(new Event("keyup"));
                     }
                 } else {
                     settingsRaw[collapsibles[i].id] = false;
