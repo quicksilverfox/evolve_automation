@@ -1538,16 +1538,11 @@
         }
 
         get ignored() {
-            return settings.researchIgnore.includes(this._vueBinding);
+            return settings['res_ignore_' + this._vueBinding] ?? false;
         }
 
         set ignored(val) {
-            let index = settings.researchIgnore.indexOf(this._vueBinding);
-            if (val && index === -1) {
-                settings.researchIgnore.push(this._vueBinding);
-            } else if (!val && index !== -1) {
-                settings.researchIgnore.splice(index, 1);
-            }
+            settings['res_ignore_' + this._vueBinding] = val;
         }
 
         isUnlocked() {
@@ -10031,7 +10026,7 @@ declare global {
             autoResearch: false,
             userResearchTheology_1: "auto",
             userResearchTheology_2: "auto",
-            researchIgnore: ["tech-purify"],
+            "res_ignore_tech-purify": true,
         }
 
         applySettings(def, reset);
@@ -10765,6 +10760,25 @@ declare global {
                 settingsRaw["bld_p_eden-rectory"] = settingsRaw["bld_p_eden-encampment"] + 1;
             }
             settingsRaw.migrationVersion = 1;
+        }
+
+        // Migrate researchIgnore array to per-tech boolean settings
+        if (Array.isArray(settingsRaw.researchIgnore)) {
+            for (let techId of settingsRaw.researchIgnore) {
+                settingsRaw['res_ignore_' + techId] = true;
+            }
+            if (settingsRaw.overrides.researchIgnore) {
+                let baseList = settingsRaw.researchIgnore;
+                for (let condition of settingsRaw.overrides.researchIgnore) {
+                    let techId = condition.ret;
+                    let inBase = baseList.includes(techId);
+                    let newCondition = {...condition, ret: !inBase};
+                    let key = 'res_ignore_' + techId;
+                    settingsRaw.overrides[key] = (settingsRaw.overrides[key] ?? []).concat([newCondition]);
+                }
+                delete settingsRaw.overrides.researchIgnore;
+            }
+            delete settingsRaw.researchIgnore;
         }
 
         // Apply default settings
@@ -14353,7 +14367,7 @@ declare global {
         let itemId = tech._vueBinding;
 
         // Skip ignored techs
-        if (settings.researchIgnore.includes(itemId)) {
+        if (settings['res_ignore_' + itemId]) {
             return "Ignored research";
         }
 
@@ -19147,10 +19161,6 @@ declare global {
                 return node.val(value);
             case "boolean":
                 return node.find('input').prop('checked', value);
-            case "list":
-                if (id === "researchIgnore") {
-                    return node.text(value.map(item => techIds[item]?.name ?? "[Invalid item]").join(", "));
-                } // else default
             default:
                 return node.text(JSON.stringify(value));
         }
@@ -19393,7 +19403,7 @@ declare global {
                     outline: none;
                 }
                 .script-sliderbar .range-label {
-                    font-size: 13px;
+                    font-size: 0.95em;
                     min-width: 95px;
                     white-space: nowrap;
                 }
@@ -19521,83 +19531,18 @@ declare global {
         .appendTo(node);
     }
 
-    function addSettingsList(node, settingName, labelText, hintText, list) {
-        let listBlock = $(`
-          <div class="script_bg_${settingName}" style="display: inline-block; width: 90%; margin-top: 6px;">
-            <label title="${hintText}" tabindex="0">
-              <span>${labelText}</span>
-              <input type="text" style="height: 25px; width: 150px; float: right;" placeholder="Research...">
-              <button class="button" style="height: 25px; float: right; margin-right: 4px; margin-left: 4px;">Remove</button>
-              <button class="button" style="height: 25px; float: right;">Add</button>
-            </label>
-            <br>
-            <textarea class="script_${settingName} textarea" style="margin-top: 12px" readonly></textarea>
-          </div>`)
-        .toggleClass('inactive-row', Boolean(settingsRaw.overrides[settingName]))
-        .on('click', {label: `Add or Remove (${settingName})`, name: settingName, type: "list", options: {list: list, name: "name", id: "_vueBinding"}}, openOverrideModal)
-        .appendTo(node);
-
-        let selectedItem = "";
-
-        let updateList = function() {
-            let techsString = settingsRaw[settingName].map(id => Object.values(list).find(obj => obj._vueBinding === id).name).join(', ');
-            $(".script_" + settingName).val(techsString);
+    function filterResearchIgnoreTable() {
+        let filter = document.getElementById("script_researchIgnoreSearch").value.toUpperCase();
+        let trs = document.getElementById("script_researchIgnoreTableBody").getElementsByTagName("tr");
+        for (let i = 0; i < trs.length; i++) {
+            let tr = trs[i];
+            let td = tr.getElementsByTagName("td")[0];
+            if (!td) continue;
+            let settingKey = tr.getAttribute("data-setting");
+            let active = settingsRaw[settingKey] || settingsRaw.overrides[settingKey];
+            let matchesSearch = filter && td.textContent.toUpperCase().indexOf(filter) > -1;
+            tr.style.display = (active || matchesSearch) ? "" : "none";
         }
-
-        let onChange = function(event, ui) {
-            event.preventDefault();
-
-            // If it wasn't selected from list
-            if(ui.item === null){
-                let typedName = Object.values(list).find(obj => obj.name === this.value);
-                if (typedName !== undefined){
-                    ui.item = {label: this.value, value: typedName._vueBinding};
-                }
-            }
-
-            // We have an item to switch
-            if (ui.item !== null && list.hasOwnProperty(ui.item.value)) {
-                this.value = ui.item.label;
-                selectedItem = ui.item.value;
-            } else {
-                this.value = "";
-                selectedItem = null;
-            }
-        };
-
-        listBlock.find('input').autocomplete({
-            minLength: 2,
-            delay: 0,
-            source: function(request, response) {
-                let matcher = new RegExp($.ui.autocomplete.escapeRegex(request.term), "i");
-                response(Object.values(list)
-                  .filter(item => matcher.test(item.name))
-                  .map(item => ({label: item.name, value: item._vueBinding})));
-            },
-            select: onChange, // Dropdown list click
-            focus: onChange, // Arrow keys press
-            change: onChange // Keyboard type
-        });
-
-        listBlock.on('click', 'button:eq(1)', function() {
-            if (selectedItem && !settingsRaw[settingName].includes(selectedItem)) {
-                settingsRaw[settingName].push(selectedItem);
-                settingsRaw[settingName].sort();
-                updateSettingsFromState();
-                updateList();
-            }
-        });
-
-        listBlock.on('click', 'button:eq(0)', function() {
-            if (selectedItem && settingsRaw[settingName].includes(selectedItem)) {
-                settingsRaw[settingName].splice(settingsRaw[settingName].indexOf(selectedItem), 1);
-                settingsRaw[settingName].sort();
-                updateSettingsFromState();
-                updateList();
-            }
-        });
-
-        updateList();
     }
 
     function addInputCallbacks(node, settingKey) {
@@ -20572,7 +20517,37 @@ declare global {
                                 {val: "tech-deify", label: game.loc('tech_deify'), hint: game.loc('tech_deify_desc')}];
         addSettingsSelect(currentNode, "userResearchTheology_2", "Target Theology 2", "Theology 2 technology to research", theology2Options);
 
-        addSettingsList(currentNode, "researchIgnore", "Ignored researches", "Listed researches won't be purchased without manual input, or user defined trigger. On top of this list script will also ignore some other special techs, such as Limit Collider, Dark Energy Bomb, Exotic Infusion, etc.", techIds);
+        // Ignored researches table
+        let ignoreHint = "Listed researches won't be purchased without manual input, or user defined trigger. On top of this list script will also ignore some other special techs, such as Limit Collider, Dark Energy Bomb, Exotic Infusion, etc.";
+        addSettingsHeader2(currentNode, "Ignored researches");
+        currentNode.append(`
+          <div style="margin-top: 4px;"><input id="script_researchIgnoreSearch" class="script-searchsettings" type="text" placeholder="Search for researches..."></div>
+          <table style="width:100%" title="${ignoreHint}">
+            <tr>
+              <th class="has-text-warning" style="width:65%">Research</th>
+              <th class="has-text-warning" style="width:35%">Ignored</th>
+            </tr>
+            <tbody id="script_researchIgnoreTableBody"></tbody>
+          </table>`);
+
+        $("#script_researchIgnoreSearch").on("keyup", filterResearchIgnoreTable);
+
+        let ignoreTableBody = $('#script_researchIgnoreTableBody');
+        let sortedTechs = Object.values(techIds).sort((a, b) => a.name.localeCompare(b.name));
+        let ignoreRowsHtml = "";
+        for (let tech of sortedTechs) {
+            ignoreRowsHtml += `<tr value="${tech._vueBinding}" data-setting="res_ignore_${tech._vueBinding}" style="display:none"><td id="script_ignrow_${tech._vueBinding}" style="width:65%"></td><td style="width:35%"></td></tr>`;
+        }
+        ignoreTableBody.append($(ignoreRowsHtml));
+
+        for (let tech of sortedTechs) {
+            let rowElement = $(`#script_ignrow_${tech._vueBinding}`);
+            rowElement.append(buildTableLabel(tech.name));
+            rowElement = rowElement.next();
+            addTableToggle(rowElement, 'res_ignore_' + tech._vueBinding);
+        }
+
+        filterResearchIgnoreTable();
 
         document.documentElement.scrollTop = document.body.scrollTop = currentScrollPosition;
     }
