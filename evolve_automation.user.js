@@ -11768,18 +11768,17 @@ declare global {
             // Patrol budget: defense+patrol pool minus fortress defense
             let patrolBudget = availableForDefenseAndPatrols - hellGarrison;
 
-            // Authority management: reduce patrols to keep soldiers home.
-            // Only patrol soldiers affect Authority — fortress defense contributes
+            // Authority management: reduce patrol budget to keep soldiers off patrols.
+            // Only patrol soldiers affect Authority — fortress garrison contributes
             // equally whether soldiers are in fortress or at home (the fortress term
-            // cancels in garrisonSize()). So we target patrols specifically.
+            // cancels in garrisonSize()). Soldiers stay in the fortress as idle garrison.
             let authPatrolReduction = 0;
+            let fullPatrolBudget = patrolBudget; // budget before authority reduction
             let authSoldiers = getAuthorityNeededSoldiers();
             if (authSoldiers > 0 && patrolBudget > 0) {
                 authPatrolReduction = Math.min(patrolBudget, authSoldiers);
                 patrolBudget -= authPatrolReduction;
-                targetHellSoldiers -= authPatrolReduction;
             }
-            _authorityPendingReduction = authPatrolReduction;
 
             // Determine the patrol attack rating
             if (settings.hellHandlePatrolSize) {
@@ -11866,6 +11865,20 @@ declare global {
                         targetHellPatrols = Math.floor(patrolBudget / targetHellPatrolSize);
                     }
                 }
+            }
+
+            // Set _authorityPendingReduction to the ACTUAL patrol soldier change,
+            // not the budget allocation. Due to floor rounding in patrol count,
+            // floor(budget/size)*size ≠ floor((budget-R)/size)*size + R.
+            // Using R would corrupt naturalBase by the rounding error each tick,
+            // causing multi-tick oscillation. Using the actual difference makes
+            // naturalBase exactly equal to the structural authority without intervention.
+            if (authPatrolReduction > 0 && targetHellPatrolSize > 0) {
+                let fullPatrolSoldiers = Math.floor(fullPatrolBudget / targetHellPatrolSize) * targetHellPatrolSize;
+                let actualPatrolSoldiers = targetHellPatrols * targetHellPatrolSize;
+                _authorityPendingReduction = fullPatrolSoldiers - actualPatrolSoldiers;
+            } else {
+                _authorityPendingReduction = 0;
             }
         } else {
             // Try to leave hell if any soldiers are still assigned so the game doesn't put miniscule amounts of soldiers back
