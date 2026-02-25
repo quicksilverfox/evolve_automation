@@ -9992,6 +9992,8 @@ declare global {
             generalMinimumTaxRate: 20,
             generalMinimumMorale: 105,
             generalMaximumMorale: 500,
+            generalMinimumAuthority: 100,
+            generalAuthorityMoraleTarget: 0,
             govInterim: GovernmentManager.Types.democracy.id,
             govFinal: GovernmentManager.Types.technocracy.id,
             govSpace: GovernmentManager.Types.corpocracy.id,
@@ -11677,6 +11679,7 @@ declare global {
     function autoHell() {
         let m = WarManager;
         if (!m._garrisonVue || !m._hellVue) {
+            _authorityPendingReduction = 0;
             return;
         }
 
@@ -11696,6 +11699,7 @@ declare global {
                 }
             }
 
+            _authorityPendingReduction = 0;
             return;  // the rest of autoHell is broken for Warlord
         }
 
@@ -11707,6 +11711,9 @@ declare global {
         if ((buildings.ElysiumFortress.isUnlocked() || buildings.ElysiumScout.isUnlocked()) && homeSoldiers < 100) {
             homeSoldiers = 100;
         }
+        // Authority soldier reservation is applied later, directly to the patrol budget.
+        // Only patrol soldiers affect Authority (fortress defense cancels out in garrisonSize()),
+        // so we target patrols specifically rather than reducing total hell soldiers here.
         // First handle not having enough soldiers, then handle patrols
         // Only go into hell at all if soldiers are close to full, or we are already there
         if (m.maxSoldiers > homeSoldiers + settings.hellMinSoldiers &&
@@ -11760,6 +11767,19 @@ declare global {
 
             // Patrol budget: defense+patrol pool minus fortress defense
             let patrolBudget = availableForDefenseAndPatrols - hellGarrison;
+
+            // Authority management: reduce patrols to keep soldiers home.
+            // Only patrol soldiers affect Authority — fortress defense contributes
+            // equally whether soldiers are in fortress or at home (the fortress term
+            // cancels in garrisonSize()). So we target patrols specifically.
+            let authPatrolReduction = 0;
+            let authSoldiers = getAuthorityNeededSoldiers();
+            if (authSoldiers > 0 && patrolBudget > 0) {
+                authPatrolReduction = Math.min(patrolBudget, authSoldiers);
+                patrolBudget -= authPatrolReduction;
+                targetHellSoldiers -= authPatrolReduction;
+            }
+            _authorityPendingReduction = authPatrolReduction;
 
             // Determine the patrol attack rating
             if (settings.hellHandlePatrolSize) {
@@ -11849,6 +11869,7 @@ declare global {
             }
         } else {
             // Try to leave hell if any soldiers are still assigned so the game doesn't put miniscule amounts of soldiers back
+            _authorityPendingReduction = 0;
             m.maxGuardPosts = 0;
             if (m.hellAssigned > 0) {
                 m.removeHellPatrolSize(m.hellPatrolSize);
@@ -12279,17 +12300,51 @@ declare global {
                         jobsToAssign = Math.min(jobsToAssign, jobMax[j]);
                         state.maxSpaceMiners = Math.max(state.maxSpaceMiners, Math.min(availableEmployees, job.breakpointEmployees(i, true)));
                     }
-                    if (job === jobs.Entertainer && !haveTech("superstar") && getGovernor() !== "media") {
+                    if (job === jobs.Entertainer) {
                         if (jobMax[j] === undefined) {
-                            let taxBuffer = (settings.autoTax || haveTask("tax")) && game.global.civic.taxes.tax_rate < poly.taxCap(false) ? 1 : 0;
                             let entertainerMorale = (game.global.tech['theatre'] + traitVal('musical', 0))
                                 * traitVal('emotionless', 0, '-') * traitVal('high_pop', 1, '=')
                                 * (state.astroSign === 'sagittarius' ? 1.05 : 1)
-                                * (game.global.race['lone_survivor'] ? 25 : 1);
-                            let moraleExtra = resources.Morale.rateOfChange - resources.Morale.maxQuantity - taxBuffer;
-                            jobMax[j] = job.count - Math.floor(moraleExtra / entertainerMorale);
+                                * (game.global.race['lone_survivor'] ? 45 : 1);
+                            if (game.global.civic.govern.type === 'democracy') {
+                                let demoBonus = game.global.tech['high_tech'] >= 12 ? 30 : game.global.tech['high_tech'] >= 2 ? 25 : 20;
+                                if (game.global.genes?.governor >= 3) { demoBonus += getGovernor() === 'organizer' ? 10 : 5; }
+                                entertainerMorale *= 1 + (demoBonus / 100);
+                            }
+                            let normalCap = resources.Morale.maxQuantity;
+                            // Compute authCap unconstrained by normalCap — normalCap depends on
+                            // entertainer count (superstar), so using it causes oscillation.
+                            let authCap = getAuthorityAwareMoraleCap(Number.MAX_SAFE_INTEGER);
+                            let authActive = authCap < Number.MAX_SAFE_INTEGER;
+
+                            if (authActive) {
+                                // Authority-aware: compute exact max entertainers to keep morale ≤ authCap.
+                                // taxBuffer: 1 morale point of headroom to prevent entertainer/tax fighting.
+                                let taxBuffer = (settings.autoTax || haveTask("tax")) && game.global.civic.taxes.tax_rate < poly.taxCap(false) ? 1 : 0;
+                                // baseMorale = morale from non-entertainer sources (stable across changes).
+                                let baseMorale = resources.Morale.rateOfChange - job.count * entertainerMorale;
+                                jobMax[j] = Math.max(0, Math.floor((authCap + taxBuffer - baseMorale) / entertainerMorale));
+
+                                if (haveTech("superstar") && resources.Morale.rateOfChange >= normalCap) {
+                                    // Morale is at cap — baseMorale computation above is unreliable
+                                    // (rateOfChange is capped, so subtracting entertainers underestimates
+                                    // baseMorale). Use cap-based constraint instead: with superstar,
+                                    // cap = baseCap + N, so cap ≤ authCap means N ≤ authCap - baseCap.
+                                    let baseCap = normalCap - job.count;
+                                    let capLimit = Math.max(0, Math.floor(authCap + taxBuffer - baseCap));
+                                    jobMax[j] = Math.min(jobMax[j], capLimit);
+                                }
+                            } else if (!haveTech("superstar") && getGovernor() !== "media") {
+                                // Normal path: limit entertainers to morale cap
+                                let taxBuffer = (settings.autoTax || haveTask("tax")) && game.global.civic.taxes.tax_rate < poly.taxCap(false) ? 1 : 0;
+                                let moraleExtra = resources.Morale.rateOfChange - normalCap - taxBuffer;
+                                jobMax[j] = job.count - Math.floor(moraleExtra / entertainerMorale);
+                            }
+                            // Superstar/media without authority: no limit (entertainers raise their own cap)
                         }
-                        jobsToAssign = Math.min(jobsToAssign, jobMax[j]);
+                        if (jobMax[j] !== undefined) {
+                            jobsToAssign = Math.min(jobsToAssign, jobMax[j]);
+                        }
                     }
                     // TODO: Remove extra bankers when cap not needed
                     // Don't assign bankers if our money is maxed and bankers aren't contributing to our money storage cap
@@ -12536,6 +12591,123 @@ declare global {
         }
     }
 
+    // Soldiers reserved for Authority management. Persists across ticks.
+    let _authorityReservedSoldiers = 0;
+    // Double-buffer for patrol reduction tracking. autoHell sets _authorityPendingReduction
+    // each script tick. getAuthorityNeededSoldiers adopts it into _authorityGameReduction
+    // only when authorityBase changes (game tick), ensuring they're always in sync.
+    // Without this, the script running multiple times between game ticks would cause
+    // _authorityGameReduction to be fresh while authorityBase is stale, corrupting naturalBase.
+    let _authorityGameReduction = 0;
+    let _authorityPendingReduction = 0;
+    let _authorityLastAuthorityBase = -1;
+    // Cached per game-tick: structural authority base (without our soldier intervention)
+    // and democracy factor. Set by getAuthorityNeededSoldiers, used by getAuthorityAwareMoraleCap.
+    let _authorityNaturalBase = 0;
+    let _authorityDemocracyFactor = 1;
+
+    function getAuthorityPerSoldier() {
+        let adjust = 0.7 + (game.global.tech['evil'] ? 0.1 * game.global.tech.evil : 0);
+        if (game.global.civic.govern.type === 'autocracy') { adjust *= 1.08; }
+        else if (game.global.civic.govern.type === 'dictator') { adjust *= 1.12; }
+        if (game.global.race['grenadier']) { adjust *= 1.75; }
+        return adjust * traitVal('high_pop', 1, '=');
+    }
+
+    function getAuthorityBase() {
+        // Authority is recalculated each tick: base - drain + gains.
+        // authorityBase = currentAuthority + currentDrain = all non-morale contributions.
+        let currentMorale = game.global.city.morale.current;
+        let democracyFactor = game.global.civic.govern.type === 'democracy' ? 0.9 : 1;
+        let drain = Math.max(0, currentMorale - 100) * democracyFactor;
+        return { authorityBase: resources.Authority.currentQuantity + drain, democracyFactor };
+    }
+
+    function getAuthorityMoraleFloor() {
+        // The minimum morale that authority management will allow, even when authority is low.
+        return Math.max(100, settings.generalMinimumMorale || 0);
+    }
+
+    function getAuthorityAwareMoraleCap(normalCap) {
+        let target = settings.generalMinimumAuthority;
+        if (!target || target <= 0 || game.global.race.universe !== 'evil' || !resources.Authority.isUnlocked()) {
+            return normalCap;
+        }
+        // Ensure soldier reservation is computed first (caches _authorityNaturalBase).
+        getAuthorityNeededSoldiers();
+        let moraleFloor = Math.min(normalCap, getAuthorityMoraleFloor());
+        let desiredMorale = settings.generalAuthorityMoraleTarget || 0;
+        if (desiredMorale > 0) {
+            // Cap at what actual soldiers can sustain while maintaining authority target.
+            // achievedAuth = naturalBase + actual reserved soldiers' contribution.
+            // _authorityPendingReduction is set by autoHell (which runs before autoJobs/autoTax).
+            let achievedAuth = _authorityNaturalBase + _authorityPendingReduction * getAuthorityPerSoldier();
+            let achievableCap = 100 + (achievedAuth - target) / _authorityDemocracyFactor;
+            return Math.max(moraleFloor, Math.min(normalCap, desiredMorale, achievableCap));
+        } else {
+            // Proportional cap from naturalBase. Self-consistent with soldier sizing.
+            let cap = 100 + (_authorityNaturalBase - target) / _authorityDemocracyFactor;
+            return Math.max(moraleFloor, Math.min(normalCap, cap));
+        }
+    }
+
+    function getAuthorityNeededSoldiers() {
+        let target = settings.generalMinimumAuthority;
+        if (!target || target <= 0 || game.global.race.universe !== 'evil' || !resources.Authority.isUnlocked()) {
+            _authorityReservedSoldiers = 0;
+            _authorityNaturalBase = 0;
+            _authorityDemocracyFactor = 1;
+            return 0;
+        }
+
+        let { authorityBase, democracyFactor } = getAuthorityBase();
+
+        // Only recompute when authorityBase changes (new game tick processed).
+        // Between game ticks, authorityBase is stale but _authorityPendingReduction
+        // might already be fresh (set by autoHell this script tick). Using the fresh
+        // pending value with the stale authorityBase corrupts naturalBase and causes
+        // massive oscillation (e.g., reserve 0→75, authorityBase still reflects 0,
+        // naturalBase = authorityBase - 75*ps = way too low → needed explodes).
+        if (authorityBase === _authorityLastAuthorityBase && _authorityLastAuthorityBase >= 0) {
+            return _authorityReservedSoldiers;
+        }
+        // Game ticked: adopt the pending reduction that autoHell set.
+        // This reduction is what the game just processed, so it matches authorityBase.
+        _authorityGameReduction = _authorityPendingReduction;
+        _authorityLastAuthorityBase = authorityBase;
+
+        let perSoldier = getAuthorityPerSoldier();
+
+        // naturalBase = structural authority without our patrol intervention.
+        // authorityBase = currentAuthority + drain is invariant under morale changes.
+        // Subtracting our soldier contribution gives the true structural base.
+        let naturalBase = authorityBase - _authorityGameReduction * perSoldier;
+        _authorityNaturalBase = naturalBase;
+        _authorityDemocracyFactor = democracyFactor;
+
+        // Size soldiers for drain at the effective morale cap.
+        // The cap and soldier calculation must be self-consistent to avoid oscillation.
+        let moraleFloor = getAuthorityMoraleFloor();
+        let desiredMorale = settings.generalAuthorityMoraleTarget || 0;
+        let effectiveCap;
+        if (desiredMorale > 0) {
+            // User wants specific morale level. Spend soldiers to sustain it.
+            // Clamp to the game's morale cap — can't exceed what entertainers can produce.
+            effectiveCap = Math.max(moraleFloor, Math.min(desiredMorale, resources.Morale.maxQuantity));
+        } else {
+            // Proportional: cap floats with naturalBase, no soldiers spent above target.
+            // When naturalBase >= target + floorDrain: cap > moraleFloor, drain = naturalBase - target, needed = 0
+            // When naturalBase < target + floorDrain: cap = moraleFloor, soldiers cover the gap
+            let rawCap = 100 + (naturalBase - target) / democracyFactor;
+            effectiveCap = Math.max(moraleFloor, rawCap);
+        }
+        let drainAtCap = Math.max(0, effectiveCap - 100) * democracyFactor;
+        let authorityNeeded = target + drainAtCap;
+
+        _authorityReservedSoldiers = Math.max(0, Math.ceil((authorityNeeded - naturalBase) / perSoldier));
+        return _authorityReservedSoldiers;
+    }
+
     function autoTax() {
         if (resources.Morale.incomeAdusted) {
             return;
@@ -12589,6 +12761,10 @@ declare global {
         if (resources.Money.storageRatio < 0.9 && getGovernor() !== "media") {
             maxMorale = Math.min(maxMorale, settings.generalMaximumMorale);
         }
+
+        let authCap = getAuthorityAwareMoraleCap(maxMorale);
+        maxMorale = Math.min(maxMorale, authCap);
+        minMorale = Math.min(minMorale, authCap);
 
         if (currentTaxRate < maxTaxRate && currentMorale >= minMorale + 1 &&
               (currentTaxRate < optimalTax || currentMorale >= maxMorale + 1 || (realMorale >= currentMorale + 1 && optimalTax >= 20))) {
@@ -14665,8 +14841,9 @@ declare global {
                         //let woundCap = Math.ceil((game.global.space.fob.enemy + (game.global.tech.outer >= 4 ? 75 : 62.5)) / 5) - protectedSoldiers;
                         //let maxLanders = getHealingRate() < woundCap ? Math.floor((getHealingRate() + protectedSoldiers) / 1.5) : Number.MAX_SAFE_INTEGER;
                         let reservedSoldiers = settings.autoFleet ? FleetManagerOuter.nextShipDesiredCrew : 0;
+                        reservedSoldiers += getAuthorityNeededSoldiers();
                         let reservedMaxSquads = Math.floor((WarManager.maxSoldiers - reservedSoldiers) / (3 * traitVal('high_pop', 0, 1)));
-                        let dispatchSoldiers = WarManager.currentSoldiers - Math.max(0, WarManager.wounded - Math.floor(getHealingRate()));
+                        let dispatchSoldiers = WarManager.currentSoldiers - Math.max(0, WarManager.wounded - Math.floor(getHealingRate())) - getAuthorityNeededSoldiers();
                         let healthySquads = Math.floor(Math.max(0, dispatchSoldiers) / (3 * traitVal('high_pop', 0, 1)));
                         maxStateOn = Math.min(maxStateOn, reservedMaxSquads, healthySquads /*, maxLanders*/ );
                     }
@@ -19810,6 +19987,8 @@ declare global {
         addSettingsNumber(currentNode, "generalMinimumTaxRate", "Minimum allowed tax rate", "Minimum tax rate for autoTax. Will still go below this amount if money storage is full");
         addSettingsNumber(currentNode, "generalMinimumMorale", "Minimum allowed morale", "Use this to set a minimum allowed morale. Remember that less than 100% can cause riots and weather can cause sudden swings");
         addSettingsNumber(currentNode, "generalMaximumMorale", "Maximum allowed morale", "Use this to set a maximum allowed morale. The tax rate will be raised to lower morale to this maximum");
+        addSettingsNumber(currentNode, "generalMinimumAuthority", "Minimum Authority target (Evil universe)", "In Evil universe, morale above 100% drains Authority. When Authority drops below this target, entertainers and taxes will be adjusted to reduce morale toward 100%. Below 100 Authority: production penalty up to -35%, army penalty. Set to 0 to disable.");
+        addSettingsNumber(currentNode, "generalAuthorityMoraleTarget", "Morale target for authority management (Evil universe)", "When set, soldiers are reserved from hell patrols to sustain this morale level while maintaining the authority target. Higher values spend more soldiers for more production. If not enough soldiers are available, morale is capped at what the patrol budget can sustain. Set to 0 to disable (morale is limited to what structural authority can sustain without soldiers).");
 
         let governmentOptions = [{val: "none", label: "None", hint: "Do not select government"}, ...Object.values(GovernmentManager.Types).filter(g => g.selectable !== false).map(g => ({val: g.id, label: game.loc(`govern_${g.id}`), hint: game.loc(`govern_${g.id}_desc`)}))];
         addSettingsSelect(currentNode, "govInterim", "Interim Government", "Temporary low tier government until you research other governments", governmentOptions);
