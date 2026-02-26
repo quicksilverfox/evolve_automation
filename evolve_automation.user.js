@@ -11747,16 +11747,34 @@ declare global {
             // current guard post stateOnCount (when stateOnCount <= targetGP).
             let availableForDefenseAndPatrols = availableHellSoldiers - guardPostDeficit;
 
-            // Determine target hell garrison size
-            // Estimated average damage is roughly 35 * threat / defense, so required defense = 35 * threat / targetDamage
-            // But the threat hitting the fortress is only an intermediate result in the bloodwar calculation, it happens after predators and patrols but before repopulation,
-            // So siege threat is actually lower than what we can see. Patrol and drone damage is wildly swingy and hard to estimate, so don't try to estimate the post-fight threat.
-            // Instead base the defense on the displayed threat, and provide an option to bolster defenses when the walls get low. The threat used in the calculation
-            // ranges from 1 * threat for 100% walls to the multiplier entered in the settings at 0% walls.
-            let hellWallsMulti = settings.hellLowWallsMulti * (1 - game.global.portal.fortress.walls / 100); // threat modifier from damaged walls = 1 to lowWallsMulti
-            let hellTargetFortressDamage = game.global.portal.fortress.threat * 35 / settings.hellTargetFortressDamage; // required defense to meet target average damage based on current threat
-            let hellTurretPower = buildings.PortalTurret.stateOnCount * (game.global.tech['turret'] ? (game.global.tech['turret'] >= 2 ? 70 : 50) : 35); // turrets count and power
-            let hellGarrison = m.getSoldiersForAttackRating(Math.max(0, hellWallsMulti * hellTargetFortressDamage - hellTurretPower)); // don't go below 0
+            // Determine target hell garrison size using equilibrium threat (stable reference).
+            // Using current/displayed threat creates a feedback loop: fewer patrols → higher threat
+            // → more garrison → even fewer patrols. Instead, compute equilibrium threat assuming
+            // all available soldiers are on patrol (no garrison). This is stable because the
+            // reference doesn't change when garrison size changes.
+            let hellGarrison = 0;
+            if (settings.hellTargetFortressDamage > 0 && settings.hellTargetFortressDamage < 100) {
+                let currentPatrolSize = m.hellPatrolSize || 1;
+                let fullPatrols = Math.floor(availableForDefenseAndPatrols / currentPatrolSize);
+                let patrolRating = currentPatrolSize > 0 ? Math.round(game.armyRating(currentPatrolSize, 'hellArmy')) : 0;
+
+                let drones = game.global.portal.war_drone?.on ?? 0;
+                let droneKills = game.global.tech?.portal >= 7 ? 87.5 : 50;
+
+                let spawnMult = 1;
+                let attractors = game.global.portal.attractor?.on ?? 0;
+                if (attractors > 0) { spawnMult *= 1 + attractors * 0.22; }
+                if (game.global.race?.universe === 'evil') { spawnMult *= 1.1; }
+                if (game.global.race?.chicken) { spawnMult *= 1 + traitVal('chicken', 0) / 100; }
+
+                let eqThreat = computeEquilibriumThreat(drones, droneKills, fullPatrols, patrolRating, spawnMult);
+
+                // Walls multiplier: 1 at 100% walls (undamaged), hellLowWallsMulti at 0% walls
+                let hellWallsMulti = 1 + (settings.hellLowWallsMulti - 1) * (1 - game.global.portal.fortress.walls / 100);
+                let requiredDefense = eqThreat * hellWallsMulti * 35 / settings.hellTargetFortressDamage;
+                let hellTurretPower = buildings.PortalTurret.stateOnCount * (game.global.tech['turret'] ? (game.global.tech['turret'] >= 2 ? 70 : 50) : 35);
+                hellGarrison = m.getSoldiersForAttackRating(Math.max(0, requiredDefense - hellTurretPower));
+            }
 
             // Always have at least half our hell contingent available for patrols, and if we cant defend properly just send everyone
             if (availableForDefenseAndPatrols < hellGarrison) {
@@ -12684,9 +12702,17 @@ declare global {
         if (authorityBase === _authorityLastAuthorityBase && _authorityLastAuthorityBase >= 0) {
             return _authorityReservedSoldiers;
         }
-        // Game ticked: adopt the pending reduction that autoHell set.
-        // This reduction is what the game just processed, so it matches authorityBase.
-        _authorityGameReduction = _authorityPendingReduction;
+        if (_authorityLastAuthorityBase < 0) {
+            // Cold start: seed from current idle fortress soldiers. On page load,
+            // soldiers are already off patrols from the previous session, so
+            // authorityBase includes their contribution. Without this, naturalBase
+            // is overestimated and it takes many ticks to converge.
+            _authorityGameReduction = Math.max(0, WarManager.hellGarrison);
+        } else {
+            // Game ticked: adopt the pending reduction that autoHell set.
+            // This reduction is what the game just processed, so it matches authorityBase.
+            _authorityGameReduction = _authorityPendingReduction;
+        }
         _authorityLastAuthorityBase = authorityBase;
 
         let perSoldier = getAuthorityPerSoldier();
@@ -12719,6 +12745,33 @@ declare global {
 
         _authorityReservedSoldiers = Math.max(0, Math.ceil((authorityNeeded - naturalBase) / perSoldier));
         return _authorityReservedSoldiers;
+    }
+
+    function computeEquilibriumThreat(drones, droneKills, patrols, patrolRating, spawnMult) {
+        let low = 0, high = 10000;
+        for (let i = 0; i < 25; i++) {
+            let mid = (low + high) / 2;
+            let thr = mid;
+            let totalKills = 0;
+
+            for (let d = 0; d < drones; d++) {
+                let encProb = thr <= 0 ? 0 : (thr < 999 ? (thr + 2) / 2000 : 1 - 499.5 / (thr + 1));
+                let kills = encProb * Math.min(droneKills, thr * 0.06);
+                totalKills += kills;
+                thr = Math.max(0, thr - kills);
+            }
+
+            for (let p = 0; p < patrols; p++) {
+                let encProb = thr <= 0 ? 0 : (thr < 999 ? (thr + 2) / 2000 : 1 - 499.5 / (thr + 1));
+                let kills = encProb * Math.min(patrolRating, thr * 0.06);
+                totalKills += kills;
+                thr = Math.max(0, thr - kills);
+            }
+
+            let spawn = thr < 10000 ? 30 * ((10000 - thr) / 2500 + 1) * spawnMult : 0;
+            if (spawn > totalKills) low = mid; else high = mid;
+        }
+        return Math.round((low + high) / 2);
     }
 
     function autoTax() {
