@@ -3221,7 +3221,7 @@
         ChthonianExcavator: new Action("Chthonian Excavator", "galaxy", "excavator", "gxy_chthonian", {smart: true}),
         ChthonianRaider: new Action("Chthonian Corsair", "galaxy", "raider", "gxy_chthonian", {ship: true, smart: true}),
 
-        PortalTurret: new Action("Portal Laser Turret", "portal", "turret", "prtl_fortress"),
+        PortalTurret: new Action("Portal Laser Turret", "portal", "turret", "prtl_fortress", {smart: true}),
         PortalCarport: new Action("Portal Surveyor Carport", "portal", "carport", "prtl_fortress"),
         PortalWarDroid: new Action("Portal War Droid", "portal", "war_droid", "prtl_fortress"),
         PortalRepairDroid: new Action("Portal Repair Droid", "portal", "repair_droid", "prtl_fortress"),
@@ -3845,6 +3845,11 @@
                         FleetManager.neededFleetShips[building._vueBinding] !== undefined &&
                         building.count >= FleetManager.neededFleetShips[building._vueBinding],
           () => "Fleet has enough ships",
+          () => 0
+      ],[
+          () => _hellNeededTurrets >= 0,
+          (building) => building === buildings.PortalTurret && building.count >= _hellNeededTurrets,
+          () => "Fortress defense has enough turrets",
           () => 0
       ],[
           () => settings.prestigeType !== "bioseed" || !isGECKNeeded(),
@@ -11684,6 +11689,7 @@ declare global {
         }
 
         m.maxGuardPosts = -1;
+        _hellNeededTurrets = -1;
 
         if (game.global.race['warlord']) {
 
@@ -11747,33 +11753,41 @@ declare global {
             // current guard post stateOnCount (when stateOnCount <= targetGP).
             let availableForDefenseAndPatrols = availableHellSoldiers - guardPostDeficit;
 
-            // Determine target hell garrison size using equilibrium threat (stable reference).
-            // Using current/displayed threat creates a feedback loop: fewer patrols → higher threat
-            // → more garrison → even fewer patrols. Instead, compute equilibrium threat assuming
-            // all available soldiers are on patrol (no garrison). This is stable because the
-            // reference doesn't change when garrison size changes.
+            // Compute equilibrium threat (stable reference, independent of garrison/patrol split).
+            // Used for both turret management and garrison sizing.
+            let currentPatrolSize = m.hellPatrolSize || 1;
+            let fullPatrols = Math.floor(availableForDefenseAndPatrols / currentPatrolSize);
+            let eqPatrolRating = currentPatrolSize > 0 ? Math.round(game.armyRating(currentPatrolSize, 'hellArmy')) : 0;
+
+            let drones = game.global.portal.war_drone?.on ?? 0;
+            let droneKills = game.global.tech?.portal >= 7 ? 87.5 : 50;
+
+            let spawnMult = 1;
+            let attractors = game.global.portal.attractor?.on ?? 0;
+            if (attractors > 0) { spawnMult *= 1 + attractors * 0.22; }
+            if (game.global.race?.universe === 'evil') { spawnMult *= 1.1; }
+            if (game.global.race?.chicken) { spawnMult *= 1 + traitVal('chicken', 0) / 100; }
+
+            let eqThreat = computeEquilibriumThreat(drones, droneKills, fullPatrols, eqPatrolRating, spawnMult);
+            let turretDefense = game.global.tech['turret'] ? (game.global.tech['turret'] >= 2 ? 70 : 50) : 35;
+
+            // Turret and garrison sizing based on equilibrium threat.
+            // hellTargetFortressDamage controls target damage per siege:
+            //   0 or >=100: no garrison or turret limiting (walls expendable)
+            //   1-99: size defenses to keep avg damage ≤ setting
+            // Smart power also disables all turrets during siege grace period.
             let hellGarrison = 0;
             if (settings.hellTargetFortressDamage > 0 && settings.hellTargetFortressDamage < 100) {
-                let currentPatrolSize = m.hellPatrolSize || 1;
-                let fullPatrols = Math.floor(availableForDefenseAndPatrols / currentPatrolSize);
-                let patrolRating = currentPatrolSize > 0 ? Math.round(game.armyRating(currentPatrolSize, 'hellArmy')) : 0;
+                let baseDefense = eqThreat * 35 / settings.hellTargetFortressDamage;
 
-                let drones = game.global.portal.war_drone?.on ?? 0;
-                let droneKills = game.global.tech?.portal >= 7 ? 87.5 : 50;
+                // Build target: worst-case walls (0%), so enough turrets exist when needed
+                _hellNeededTurrets = Math.ceil(baseDefense * settings.hellLowWallsMulti / turretDefense);
 
-                let spawnMult = 1;
-                let attractors = game.global.portal.attractor?.on ?? 0;
-                if (attractors > 0) { spawnMult *= 1 + attractors * 0.22; }
-                if (game.global.race?.universe === 'evil') { spawnMult *= 1.1; }
-                if (game.global.race?.chicken) { spawnMult *= 1 + traitVal('chicken', 0) / 100; }
-
-                let eqThreat = computeEquilibriumThreat(drones, droneKills, fullPatrols, patrolRating, spawnMult);
-
-                // Walls multiplier: 1 at 100% walls (undamaged), hellLowWallsMulti at 0% walls
+                // Garrison covers what current turrets don't
                 let hellWallsMulti = 1 + (settings.hellLowWallsMulti - 1) * (1 - game.global.portal.fortress.walls / 100);
-                let requiredDefense = eqThreat * hellWallsMulti * 35 / settings.hellTargetFortressDamage;
-                let hellTurretPower = buildings.PortalTurret.stateOnCount * (game.global.tech['turret'] ? (game.global.tech['turret'] >= 2 ? 70 : 50) : 35);
-                hellGarrison = m.getSoldiersForAttackRating(Math.max(0, requiredDefense - hellTurretPower));
+                let requiredDefense = baseDefense * hellWallsMulti;
+                let turretPower = buildings.PortalTurret.stateOnCount * turretDefense;
+                hellGarrison = m.getSoldiersForAttackRating(Math.max(0, requiredDefense - turretPower));
             }
 
             // Always have at least half our hell contingent available for patrols, and if we cant defend properly just send everyone
@@ -12621,6 +12635,10 @@ declare global {
             }
         }
     }
+
+    // Turret build limit for fortress defense. Set by autoHell, read by weighting and smart power.
+    // -1 means no limit (disabled or not yet computed). Based on worst-case walls (0%).
+    let _hellNeededTurrets = -1;
 
     // Soldiers reserved for Authority management. Persists across ticks.
     let _authorityReservedSoldiers = 0;
@@ -14793,6 +14811,17 @@ declare global {
             if (settings.autoFleet && settings.fleetDisableExcess &&
                 FleetManager.neededFleetShips[building._vueBinding] !== undefined) {
                 maxStateOn = Math.min(maxStateOn, FleetManager.neededFleetShips[building._vueBinding]);
+            }
+            // Turret smart power: off during siege grace period, cap to defense needs
+            if (building === buildings.PortalTurret && building.autoStateSmart && game.global.portal?.fortress) {
+                let siegeTimer = game.global.portal.fortress.siege ?? 999;
+                if (siegeTimer > 900) {
+                    building.extraDescription += `Turrets off (no siege possible)<br>`;
+                    maxStateOn = 0;
+                } else if (_hellNeededTurrets >= 0 && building.count > _hellNeededTurrets) {
+                    building.extraDescription += `Fortress defense needs ${_hellNeededTurrets} turret${_hellNeededTurrets !== 1 ? "s" : ""}, ${building.count - _hellNeededTurrets} excess powered off<br>`;
+                    maxStateOn = Math.min(maxStateOn, _hellNeededTurrets);
+                }
             }
             if (settings.buildingsLimitPowered) {
                 maxStateOn = Math.min(maxStateOn, building.autoMax);
