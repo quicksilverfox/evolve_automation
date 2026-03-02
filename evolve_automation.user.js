@@ -9998,7 +9998,7 @@ declare global {
             generalMinimumMorale: 105,
             generalMaximumMorale: 500,
             generalMinimumAuthority: 100,
-            generalAuthorityMoraleTarget: 0,
+            generalAuthorityMoraleTarget: 200,
             govInterim: GovernmentManager.Types.democracy.id,
             govFinal: GovernmentManager.Types.technocracy.id,
             govSpace: GovernmentManager.Types.corpocracy.id,
@@ -12748,9 +12748,11 @@ declare global {
         let desiredMorale = settings.generalAuthorityMoraleTarget || 0;
         let effectiveCap;
         if (desiredMorale > 0) {
-            // User wants specific morale level. Spend soldiers to sustain it.
-            // Clamp to the game's morale cap — can't exceed what entertainers can produce.
-            effectiveCap = Math.max(moraleFloor, Math.min(desiredMorale, resources.Morale.maxQuantity));
+            // Size soldiers for the actual morale drain, capped to the desired level.
+            // Using current morale (not potential/cap) avoids over-reserving when
+            // entertainers can't produce the desired level. Recalculated every tick,
+            // so soldiers naturally track as morale changes.
+            effectiveCap = Math.max(moraleFloor, Math.min(desiredMorale, resources.Morale.currentQuantity));
         } else {
             // Proportional: cap floats with naturalBase, no soldiers spent above target.
             // When naturalBase >= target + floorDrain: cap > moraleFloor, drain = naturalBase - target, needed = 0
@@ -14819,7 +14821,7 @@ declare global {
                     building.extraDescription += `Turrets off (no siege possible)<br>`;
                     maxStateOn = 0;
                 } else if (_hellNeededTurrets >= 0 && building.count > _hellNeededTurrets) {
-                    building.extraDescription += `Fortress defense needs ${_hellNeededTurrets} turret${_hellNeededTurrets !== 1 ? "s" : ""}, ${building.count - _hellNeededTurrets} excess powered off<br>`;
+                    building.extraDescription += `Defense needs ${_hellNeededTurrets}<br>`;
                     maxStateOn = Math.min(maxStateOn, _hellNeededTurrets);
                 }
             }
