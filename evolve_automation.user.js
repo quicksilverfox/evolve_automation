@@ -16469,7 +16469,7 @@ declare global {
               settings.mechScrapEfficiency;
 
             // Protect titan mechs on Eden patrol duty (titan is most space-efficient for Eden due to +10% boss bonus and 4 weapons)
-            let patrolMechs = settings.mechOptimizeEden && game.global.eden?.mech_station?.count >= 10 ? (game.global.eden.mech_station.mechs ?? 0) : 0;
+            let patrolMechs = settings.mechOptimizeEden && game.global.eden?.mech_station?.count >= 10 && game.global.eden.mech_station.mode > 0 ? (game.global.eden.mech_station.mechs ?? 0) : 0;
 
             // Allow scrapping excess collectors even if they're optimal
             let collectorsCount = m.activeMechs.filter(mech => mech.size === 'collector').length;
