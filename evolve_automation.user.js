@@ -12548,18 +12548,33 @@ declare global {
                                        - ((requiredWorkers[b.index] + (requiredServants[b.index] * servantMod)) / b.weighting))
                                        || a.index - b.index;
             for (let b = 0; b < 3 && (availableWorkers > 0 || availableServants > 0); b++) {
+                // For the weighted distribution phase (b=2), concentrate servants on scavenger
+                // since workers get large racialTrait bonuses for other jobs but scavenger has minimal bonuses.
+                // Servants don't benefit from racialTrait, so they lose the least productivity as scavengers.
+                if (b === 2 && availableServants > 0) {
+                    let scavEntry = splitJobs.find(s => s.job === jobs.Scavenger);
+                    if (scavEntry) {
+                        let maxForScav = availableServants;
+                        if (jobMax[scavEntry.index] !== undefined) {
+                            let currentTotal = requiredWorkers[scavEntry.index] + requiredServants[scavEntry.index] * servantMod;
+                            maxForScav = Math.min(maxForScav, Math.ceil(Math.max(0, jobMax[scavEntry.index] - currentTotal) / servantMod));
+                        }
+                        requiredServants[scavEntry.index] += maxForScav;
+                        availableServants -= maxForScav;
+                    }
+                }
                 let remainingJobs = splitJobs.slice();
                 while ((availableWorkers + availableServants) > 0 && remainingJobs.length > 0) {
                     let jobDetails = remainingJobs.sort(splitSorter)[0];
                     let total = requiredWorkers[jobDetails.index] + (requiredServants[jobDetails.index] * servantMod);
                     let bp = jobDetails.job.getBreakpoint(b) > 0 ? jobDetails.job.breakpointEmployees(b) : 0;
                     if ((b === 2 || total < bp) && !(total >= jobMax[jobDetails.index])) {
-                        if (availableServants > 0) {
-                            requiredServants[jobDetails.index]++;
-                            availableServants--;
-                        } else {
+                        if (b < 2 && availableWorkers > 0 || availableServants <= 0) {
                             requiredWorkers[jobDetails.index]++;
                             availableWorkers--;
+                        } else {
+                            requiredServants[jobDetails.index]++;
+                            availableServants--;
                         }
                     } else {
                         remainingJobs.shift();
