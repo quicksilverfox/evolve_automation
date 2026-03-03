@@ -3509,24 +3509,27 @@
                   let transportCount = buildings.LakeTransport.count;
                   let total = biremeCount + transportCount;
                   let rating = game.global.blood['spire'] && game.global.blood.spire >= 2 ? 0.8 : 0.85;
-                  let spareSupport = resources.Lake_Support.rateOfChange > 0;
+                  // Spare support > 1: filling phase (autoPower upgrade only frees exactly 1)
+                  let spareSupport = resources.Lake_Support.rateOfChange > 1;
 
-                  // Calculate optimal bireme count for next build
-                  let optimalBiremes = 0;
-                  let bestSupply = 0;
-                  for (let b = 0; b <= total + 1; b++) {
-                      let supply = (1 - rating ** b) * ((total + 1 - b) * 5);
-                      if (supply > bestSupply) {
-                          bestSupply = supply;
-                          optimalBiremes = b;
+                  // Compute optimal supply achievable with given ships and support capacity.
+                  // Naturally handles upgrades: excess biremes get "turned off" in the optimization.
+                  let lakeSupport = resources.Lake_Support.maxQuantity;
+                  let optSupply = (b, t, s) => {
+                      let best = 0;
+                      for (let bi = 0; bi <= Math.min(b, s); bi++) {
+                          let ti = Math.min(t, s - bi);
+                          let sup = (1 - rating ** bi) * (ti * 5);
+                          if (sup > best) best = sup;
                       }
-                  }
+                      return best;
+                  };
+                  let currentBest = optSupply(biremeCount, transportCount, lakeSupport);
+                  let marginalBireme = optSupply(biremeCount + 1, transportCount, lakeSupport) - currentBest;
+                  let marginalTransport = optSupply(biremeCount, transportCount + 1, lakeSupport) - currentBest;
 
                   if (spareSupport) {
-                      // Have spare support - use per-gem optimization with efficiency tooltips
-                      let currentSupply = (1 - (rating ** biremeCount)) * (transportCount * 5);
-                      let marginalBireme = (1 - (rating ** (biremeCount + 1))) * (transportCount * 5) - currentSupply;
-                      let marginalTransport = (1 - (rating ** biremeCount)) * ((transportCount + 1) * 5) - currentSupply;
+                      // Filling phase - multiple slots available, use per-gem efficiency to fill quickly
                       let nextBireme = marginalBireme / buildings.LakeBireme.cost["Soul_Gem"];
                       let nextTransport = marginalTransport / buildings.LakeTransport.cost["Soul_Gem"];
                       if (building === buildings.LakeBireme && nextBireme < nextTransport) {
@@ -3536,10 +3539,9 @@
                           return buildings.LakeBireme;
                       }
                   } else {
-                      // No spare support - check if upgrade is needed (matching autoPower upgrade logic)
+                      // No spare support (or only 1 from upgrade) - check if upgrade is needed
                       let upgrading = false;
                       if (settings.buildingsTransportUpgrade) {
-                          let lakeSupport = resources.Lake_Support.maxQuantity;
                           let effectiveFleet = Math.min(total, lakeSupport);
                           let optBiremes = 0;
                           let bestSup = 0;
@@ -3556,11 +3558,8 @@
                               building.extraDescription += "Waiting for Soul Gems to upgrade to Transport<br>";
                           }
                       }
-                      // Per-supply optimization fallback - redirect suboptimal ship to better one
+                      // Marginal comparison fallback
                       if (!upgrading) {
-                          let currentSupply = (1 - (rating ** biremeCount)) * (transportCount * 5);
-                          let marginalBireme = (1 - (rating ** (biremeCount + 1))) * (transportCount * 5) - currentSupply;
-                          let marginalTransport = (1 - (rating ** biremeCount)) * ((transportCount + 1) * 5) - currentSupply;
                           if (building === buildings.LakeBireme && marginalBireme < marginalTransport) {
                               return buildings.LakeTransport;
                           }
@@ -15262,8 +15261,8 @@ declare global {
             }
         }
 
-        if (manageTransport && resources.Lake_Support.rateOfChange > 0) {
-            let lakeSupport = resources.Lake_Support.rateOfChange;
+        if (manageTransport && resources.Lake_Support.maxQuantity > 0) {
+            let lakeSupport = resources.Lake_Support.maxQuantity;
             let rating = game.global.blood['spire'] && game.global.blood.spire >= 2 ? 0.8 : 0.85;
             let bireme = buildings.LakeBireme;
             let transport = buildings.LakeTransport;
@@ -15284,10 +15283,11 @@ declare global {
             }
 
             // If fewer transports than optimal, free 1 bireme support slot so autoBuild can build a transport.
-            // Uses effective fleet (not total built) so overcapacity ships don't inflate the target.
+            // Only disable 1 bireme if there's no spare support — don't keep disabling more each tick while waiting for the transport to be built.
             if (settings.buildingsTransportUpgrade && transportCount < effectiveFleet - optimalBiremes &&
                 transport.isAutoBuildable() && transport.isAffordable(true) &&
-                resources.Soul_Gem.currentQuantity >= transport.cost["Soul_Gem"]) {
+                resources.Soul_Gem.currentQuantity >= transport.cost["Soul_Gem"] &&
+                resources.Lake_Support.rateOfChange <= 0) {
                 biremeCount = bireme.stateOnCount - 1;
                 bireme.extraDescription += `Upgrading: Disabling 1 to build Transport (${transportCount}→${effectiveFleet - optimalBiremes} optimal)<br>`;
             }
@@ -16385,10 +16385,15 @@ declare global {
             [newSize, forceBuild] = m.getPreferredSize();
 
             // Build titans for Eden patrol if needed
+            // mech_station.mechs is dynamic — it's how many mechs the game consumed this tick to suppress hostility.
+            // When all patrol mechs are already titans, mechs === titansInPatrol, so we also check
+            // whether hostility is fully suppressed (effect at max) to decide if more titans are needed.
             if (settings.mechOptimizeEden && game.global.eden?.mech_station?.count >= 10 && game.global.eden.mech_station.mode > 0) {
                 let patrolCount = game.global.eden.mech_station.mechs ?? 0;
                 let titansInPatrol = m.activeMechs.filter((mech, idx) => idx < patrolCount && mech.size === "titan").length;
-                if (titansInPatrol < patrolCount) {
+                let maxEffect = game.global.eden.mech_station.mode >= 5 ? 120 : game.global.eden.mech_station.mode === 4 ? 110 : 100;
+                let needMoreTitans = titansInPatrol < patrolCount || (game.global.eden.mech_station.effect ?? 0) < maxEffect;
+                if (needMoreTitans) {
                     // Need more titans for patrol - check if we can afford one
                     let {s, c} = poly.mechCost("titan");
                     if (resources.Soul_Gem.spareQuantity >= s && resources.Supply.maxQuantity >= c) {
