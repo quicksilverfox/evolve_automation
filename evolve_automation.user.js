@@ -7418,7 +7418,9 @@
                     // Silently ignore triggers for not-unlocked buildings, like normal triggers do
                     if (typeof triggerable.isUnlocked === "function" && !triggerable.isUnlocked()) return;
 
-                    SnippetManager.activeTriggers.push(triggerable);
+                    if (!SnippetManager.activeTriggers.includes(triggerable)) {
+                        SnippetManager.activeTriggers.push(triggerable);
+                    }
                 }
                 else if (typeof triggerable === "object") {
                     // Custom resource list legacy API support, before .custom() was split out. No return value here.
