@@ -12680,12 +12680,46 @@ declare global {
     }
 
     function getAuthorityBase() {
-        // Authority is recalculated each tick: base - drain + gains.
-        // authorityBase = currentAuthority + currentDrain = all non-morale contributions.
-        let currentMorale = game.global.city.morale.current;
-        let democracyFactor = game.global.civic.govern.type === 'democracy' ? 0.9 : 1;
-        let drain = Math.max(0, currentMorale - 100) * democracyFactor;
-        return { authorityBase: resources.Authority.currentQuantity + drain, democracyFactor };
+        // Structural authority before drain — base + soldier gain + pet + colony.
+        // Computed directly from game state instead of `currentQuantity + drain`,
+        // because Authority.amount is clamped to [0, max] (main.js:8087). When the
+        // amount hits the cap, currentQuantity + drain misrepresents the structural
+        // base by a drain-dependent amount, which makes naturalBase noisy and causes
+        // morale/authority/patrol/garrison to oscillate every tick.
+        let race = game.global.race;
+        let civic = game.global.civic;
+        let portal = game.global.portal;
+        let democracyFactor = civic.govern.type === 'democracy' ? 0.9 : 1;
+
+        let baseAmount = race['cataclysm'] || race['orbit_decayed'] ? 90 : (race['lone_survivor'] ? 100 : 80);
+        let structural = baseAmount;
+
+        if (civic['garrison']) {
+            // Patrol soldiers cancel out — only home garrison + fortress idle gain authority.
+            // Match game's garrisonSize() + fortress idle add-back: workers - crew - fob - pillbox - patrols*size.
+            let homeGarrison = WarManager.currentCityGarrison;
+            let pillbox = game.global.eden && game.global.eden['pillbox'] ? game.global.eden.pillbox.staffed : 0;
+            let fortressIdle = portal && portal['fortress']
+                ? portal.fortress.garrison - portal.fortress.patrols * portal.fortress.patrol_size
+                : 0;
+            structural += (homeGarrison - pillbox + fortressIdle) * getAuthorityPerSoldier();
+        }
+
+        if (race['pet']) {
+            let pet = 1;
+            if (race.pet.event > 0) { pet++; }
+            if (race.pet.pet > 0) { pet += race.pet.type === 'cat' ? 2 : 1; }
+            else if (race.pet.pet < 0) { pet -= race.pet.type === 'cat' ? 2 : 1; }
+            structural += pet;
+        }
+
+        if ((race['lone_survivor'] || game.global.tech['isolation'])
+                && game.global.tauceti && game.global.tauceti['colony']
+                && game.support_on && game.support_on['colony']) {
+            structural += game.support_on['colony'] * 5;
+        }
+
+        return { authorityBase: structural, democracyFactor };
     }
 
     function getAuthorityMoraleFloor() {
