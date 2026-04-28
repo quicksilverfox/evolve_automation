@@ -3447,8 +3447,7 @@
                       return "Building mechs...";
                   }
                   let mechBay = game.global.portal.mechbay;
-                  let useRandom = settings.mechBuild === "random" || (game.global.race['warlord'] && settings.mechWarlordPreferHydra && settings.mechBuild === "user");
-                  let newSize = !haveTask("mech") ? useRandom ? MechManager.getPreferredSize()[0] : mechBay.blueprint.size : "titan";
+                  let newSize = !haveTask("mech") ? settings.mechBuild === "random" ? MechManager.getPreferredSize()[0] : mechBay.blueprint.size : "titan";
                   let [newGems, newSupply, newSpace] = MechManager.getMechCost({size: newSize});
                   if (newSpace <= mechBay.max - mechBay.bay && newSupply <= resources.Supply.maxQuantity && newGems <= resources.Soul_Gem.currentQuantity) {
                       return "Saving supplies for new mech";
@@ -6604,11 +6603,16 @@
                     this.updateBestBody(size);
                     this.bestMech[size] = this.getRandomMech(size);
                 });
+                // For warlord+preferHydra: pin bestMech archfiend to the optimal-for-floor flex variant
+                // (deterministic max). Otherwise random rolls cause mechsPotential to bounce above 1.0
+                // when the actual fleet has hazard-resistant variants with higher power than the rolled bestMech.
+                if (this.WarlordHydra.isActive()) {
+                    this.bestMech['titan'] = this.WarlordHydra.optimalArchfiend(m => this.getMechStats(m));
+                }
                 // For warlord: alias normal-size keys to warlord-size keys so bestMech lookup works
                 // when bestSize/bestGems/bestSupply contain warlord-size strings (from m.size after translation).
                 if (game.global.race['warlord']) {
-                    const SIZE_TO_WARLORD = { small: 'minion', medium: 'fiend', large: 'cyberdemon', titan: 'archfiend' };
-                    Object.entries(SIZE_TO_WARLORD).forEach(([normal, warlord]) => {
+                    Object.entries(this.WarlordHydra.SIZE_MAP).forEach(([normal, warlord]) => {
                         this.bestMech[warlord] = this.bestMech[normal];
                     });
                 }
@@ -6705,15 +6709,17 @@
             let mechBay = game.global.portal.mechbay;
 
             // Warlord: skip both collector branches (mechCollect x0.1 makes them inefficient),
-            // translate user-configured size keys to warlord equivalents.
+            // and dispatch to the WarlordHydra strategy (set-and-forget) when active.
             if (game.global.race['warlord']) {
+                if (this.WarlordHydra.isActive()) {
+                    return this.WarlordHydra.preferredSize(mechBay);
+                }
+                // preferHydra OFF: settings-driven warlord behavior
                 if (mechBay.scouts * 2 / mechBay.max < settings.mechScouts) {
                     return ['minion', true];
                 }
-                const SIZE_TO_WARLORD = { small: 'minion', medium: 'fiend', large: 'cyberdemon', titan: 'archfiend' };
                 let configured = game.global.portal.spire.status.gravity ? settings.mechSizeGravity : settings.mechSize;
-                let translated = SIZE_TO_WARLORD[configured] ?? 'archfiend';
-                return [translated, false];
+                return [this.WarlordHydra.SIZE_MAP[configured] ?? 'archfiend', false];
             }
 
             if (settings.mechFillBay && mechBay.max - mechBay.bay === 1) {
@@ -6768,41 +6774,116 @@
             return this.mechsPower > 0 ? (100 - game.global.portal.spire.progress) / (this.mechsPower * this.getProgressMod()) : Number.MAX_SAFE_INTEGER;
         },
 
-        // Hardcoded warlord blueprint generator.
-        // Archfiend defaults to hydra (4 forced elements: cold/shock/fire/acid) with a hazard-breadth equip
-        // loadout; the 5th equip slot rotates between athletic/echo/thermal for varied hazard coverage.
-        // Minions are scout-imps with kinetic/missile/flame to cover hydra's weak bosses (bone_golem,
-        // zombie, raptor) and a scouter equip that doubles their scout count.
-        // No collector path: warlord mechCollect is x0.1 (portal.js:7595), so scavenger-minions are
-        // dramatically less efficient than just building more archfiends.
-        // Accepts both normal-game size keys (small/medium/large/titan) and warlord-native ones,
-        // so callers in initLab's Size iteration get consistent warlord blueprints.
-        getWarlordMech(size) {
-            const SIZE_TO_WARLORD = { small: 'minion', medium: 'fiend', large: 'cyberdemon', titan: 'archfiend' };
-            if (SIZE_TO_WARLORD[size]) size = SIZE_TO_WARLORD[size];
+        // Self-contained warlord+preferHydra strategy: all constants, blueprints, and build decisions
+        // live in this object. Other MechManager methods just delegate to it when the strategy is active.
+        // Strategy: hydra archfiends (4 forced elements cold/shock/fire/acid + 5-equip hazard loadout)
+        // alternating with scouter-imps (kinetic/missile/flame); 5:3 ratio capped at 50 scouter-minions
+        // (= 100 scout-points = +1.0 terrainRating bonus). No collectors (warlord mechCollect = x0.1).
+        WarlordHydra: {
+            isActive() {
+                return game.global.race['warlord'] && settings.mechWarlordPreferHydra;
+            },
+            SIZE_MAP: { small: 'minion', medium: 'fiend', large: 'cyberdemon', titan: 'archfiend' },
+            SCOUT_RATIO: 0.4,        // 5:3 imp:hydra ratio (10 scout-points per 50 bay)
+            SCOUT_CAP: 100,          // 50 scouter-minions = +1.0 max terrainRating bonus
+            FLEX_EQUIP: ['athletic', 'echo', 'thermal'],
+            BASE_EQUIP: ['cold', 'heat', 'manashield', 'darkvision'],
+            HYDRA_HARDPOINT: ['cold', 'shock', 'fire', 'acid'],
+            SCOUT_CHASSIS: ['imp', 'flying_imp'],
+            SCOUT_WEAPONS: ['kinetic', 'missile', 'flame'],
 
-            let pick = arr => arr[Math.floor(Math.random() * arr.length)];
+            _pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; },
 
-            if (size === 'minion') {
+            // Translate normal-size keys to warlord-native ones; pass-through for already-warlord sizes.
+            normalizeSize(size) { return this.SIZE_MAP[size] ?? size; },
+
+            // Single source of truth for blueprint structure. Caller can fix specific slots; rest are random.
+            archfiend(opts) {
                 return {
-                    size,
-                    chassis: pick(['imp', 'flying_imp']),
-                    hardpoint: [pick(['kinetic', 'missile', 'flame'])],
-                    equip: ['scouter'],
-                    infernal: false
+                    size: 'archfiend',
+                    chassis: 'hydra',
+                    hardpoint: this.HYDRA_HARDPOINT,
+                    equip: [...this.BASE_EQUIP, opts?.flex ?? this._pick(this.FLEX_EQUIP)],
+                    infernal: false,
                 };
+            },
+            scoutImp(opts) {
+                return {
+                    size: 'minion',
+                    chassis: opts?.chassis ?? this._pick(this.SCOUT_CHASSIS),
+                    hardpoint: [opts?.weapon ?? this._pick(this.SCOUT_WEAPONS)],
+                    equip: ['scouter'],
+                    infernal: false,
+                };
+            },
+
+            // Random blueprint for a given size — used by autoMech for actual builds (variety per build).
+            randomBlueprint(size) {
+                size = this.normalizeSize(size);
+                if (size === 'minion') return this.scoutImp();
+                return this.archfiend();
+            },
+
+            // Optimal-for-current-floor archfiend (deterministic max). Used as bestMech reference so that
+            // mechsPotential denominator stays stable instead of bouncing with random flex rolls.
+            optimalArchfiend(getMechStats) {
+                let best = null, bestPower = -Infinity;
+                for (let flex of this.FLEX_EQUIP) {
+                    let mech = this.archfiend({ flex });
+                    let stats = getMechStats(mech);
+                    if (stats.power > bestPower) {
+                        bestPower = stats.power;
+                        best = { ...mech, ...stats };
+                    }
+                }
+                return best;
+            },
+
+            // Build-size decision: scouts-first up to ratio/cap, then archfiends.
+            preferredSize(mechBay) {
+                if (mechBay.scouts < this.SCOUT_CAP && mechBay.scouts * 2 / mechBay.max < this.SCOUT_RATIO) {
+                    return ['minion', true];
+                }
+                return ['archfiend', false];
+            },
+
+            // Snippet-style blueprint update: pick next-needed mech (scout-imp or hydra) and write it
+            // to mechBay.blueprint via vue methods. autoMech then runs through its existing 'user' mode
+            // path, which reads mechBay.blueprint. Lets us bypass getRandomMech/getPreferredSize for
+            // the build path entirely.
+            syncBlueprint(mechBay, vue) {
+                let [size] = this.preferredSize(mechBay);
+                let bp = size === 'minion' ? this.scoutImp() : this.archfiend();
+                vue.b.infernal = bp.infernal;
+                vue.setSize(bp.size);
+                vue.setType(bp.chassis);
+                bp.hardpoint.forEach((w, i) => vue.setWep(w, i));
+                bp.equip.forEach((e, i) => vue.setEquip(e, i));
+                return bp;
+            },
+        },
+
+        // Warlord blueprint dispatcher. Delegates to WarlordHydra strategy when preferHydra is on; otherwise
+        // returns size-appropriate blueprints for the optimizer-driven warlord path.
+        // Accepts both normal-game size keys (small/medium/large/titan) and warlord-native ones, so callers
+        // in initLab's Size iteration get consistent warlord blueprints.
+        getWarlordMech(size) {
+            if (settings.mechWarlordPreferHydra) {
+                return this.WarlordHydra.randomBlueprint(size);
             }
+            // preferHydra OFF: random non-hydra archfiend / scout-imp / fallback
+            size = this.WarlordHydra.normalizeSize(size);
+            let pick = arr => arr[Math.floor(Math.random() * arr.length)];
+            if (size === 'minion') return this.WarlordHydra.scoutImp();
             if (size === 'archfiend') {
-                let chassis = settings.mechWarlordPreferHydra
-                    ? 'hydra'
-                    : pick(['hydra', 'dragon', 'snake', 'gorgon']);
-                let flex = pick(['athletic', 'echo', 'thermal']);
-                let equip = ['cold', 'heat', 'manashield', 'darkvision', flex];
+                let chassis = pick(['hydra', 'dragon', 'snake', 'gorgon']);
+                let flex = pick(this.WarlordHydra.FLEX_EQUIP);
+                let equip = [...this.WarlordHydra.BASE_EQUIP, flex];
                 let fallbackWep = (this.bestWeapon && this.bestWeapon.length > 0)
                     ? this.bestWeapon[Math.floor(Math.random() * this.bestWeapon.length)]
                     : 'cold';
                 let hardpoint = chassis === 'hydra'
-                    ? ['cold', 'shock', 'fire', 'acid']
+                    ? this.WarlordHydra.HYDRA_HARDPOINT
                     : Array(2).fill(fallbackWep);
                 return { size, chassis, hardpoint, equip, infernal: false };
             }
@@ -16550,11 +16631,13 @@ declare global {
 
         let newMech = {};
         let newSize, forceBuild;
-        // Warlord with prefer-hydra has its own hardcoded blueprint logic; ignore mechBuild='user'
-        // (otherwise the same blueprint set by the previous build would loop forever).
         let effectiveBuild = settings.mechBuild;
-        if (game.global.race['warlord'] && settings.mechWarlordPreferHydra && effectiveBuild === "user") {
-            effectiveBuild = "random";
+        // Warlord+preferHydra: snippet-style flow. Pick next-needed mech (scout-imp or hydra), write it
+        // to mechBay.blueprint via vue methods, and use 'user' mode for the build path. Avoids needing
+        // overrides scattered around the optimizer (getRandomMech, bay-gate predictions, etc.).
+        if (m.WarlordHydra.isActive() && effectiveBuild !== "none") {
+            m.WarlordHydra.syncBlueprint(mechBay, m._assemblyVue);
+            effectiveBuild = "user";
         }
         if (effectiveBuild === "random") {
             [newSize, forceBuild] = m.getPreferredSize();
@@ -16613,7 +16696,7 @@ declare global {
         // The flex re-rolls each time stateHash changes (e.g. when a scout is built), and old hydras with
         // a different flex score lower than the freshly-rolled best -> they get flagged for scrap and
         // rebuilt every tick. Disable scrap entirely; all hydras are "good enough" for the simple heuristic.
-        if (game.global.race['warlord'] && settings.mechWarlordPreferHydra) {
+        if (m.WarlordHydra.isActive()) {
             mechScrap = "none";
         } else if (canExpandBay && resources.Supply.currentQuantity < resources.Supply.maxQuantity && !prolongActive && resources.Supply.rateOfChange >= settings.mechMinSupply) {
             // We can build purifier or bay once we'll have enough resources, do not rebuild old mechs
@@ -17070,9 +17153,8 @@ declare global {
 
             // only reserve gems if we have bay space
             if (baySpace > 0) {
-                let useRandom = settings.mechBuild === "random" || (game.global.race['warlord'] && settings.mechWarlordPreferHydra && settings.mechBuild === "user");
                 let newSize = !haveTask("mech") ?
-                    (useRandom ? MechManager.getPreferredSize()[0] : mechBay.blueprint.size) :
+                    (settings.mechBuild === "random" ? MechManager.getPreferredSize()[0] : mechBay.blueprint.size) :
                     "titan";
                 let [newGems, newSupply, newSpace] = MechManager.getMechCost({ size: newSize });
 
@@ -21393,9 +21475,7 @@ declare global {
             addSettingsSelect(currentNode, "mechSpecial", "Special mechs", "Configures special equip", specialOptions);
         }
         // Warlord-only: prefer hydra for archfiend builds
-        if (game.global.race['warlord']) {
-            addSettingsToggle(currentNode, "mechWarlordPreferHydra", "Prefer hydra archfiends", "When building archfiends, always pick hydra chassis (4 forced elements cold/shock/fire/acid; most versatile, no terrain matchup below 0.65). Disable to let the script pick randomly between hydra/dragon/snake/gorgon.");
-        }
+        addSettingsToggle(currentNode, "mechWarlordPreferHydra", "Prefer hydra archfiends (Warlord)", "Forces a hardcoded warlord build strategy — hydra archfiends with [cold/heat/manashield/darkvision/random-flex] equip + scout-imps with kinetic/missile/flame at fixed 5:3 ratio, capped at 50 imps. Overrides most settings. Disable to fall back to default mech manager behavior.");
         // mechWaygatePotential is ignored in warlord (fixed loadout = no potential headroom to gate on); the Waygate trigger at line 15163 already skips it.
         addSettingsNumber(currentNode, "mechWaygatePotential", "Maximum mech potential for Waygate", "Fight Demon Lord only when current mech team potential below given amount. Full bay of best mechs will have `1` potential. Damage against Demon Lord does not affected by floor modifiers, all mechs always does 100% damage to him. Thus it's most time-efficient to fight him at times when mechs can't make good progress against regular monsters, and waiting for rebuilding. Auto Power needs to be on for this to work.");
         addSettingsNumber(currentNode, "mechMinSupply", "Minimum supply income", "Build collectors if current supply income below given number");
