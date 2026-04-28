@@ -3447,7 +3447,8 @@
                       return "Building mechs...";
                   }
                   let mechBay = game.global.portal.mechbay;
-                  let newSize = !haveTask("mech") ? settings.mechBuild === "random" ? MechManager.getPreferredSize()[0] : mechBay.blueprint.size : "titan";
+                  let useRandom = settings.mechBuild === "random" || (game.global.race['warlord'] && settings.mechWarlordPreferHydra && settings.mechBuild === "user");
+                  let newSize = !haveTask("mech") ? useRandom ? MechManager.getPreferredSize()[0] : mechBay.blueprint.size : "titan";
                   let [newGems, newSupply, newSpace] = MechManager.getMechCost({size: newSize});
                   if (newSpace <= mechBay.max - mechBay.bay && newSupply <= resources.Supply.maxQuantity && newGems <= resources.Soul_Gem.currentQuantity) {
                       return "Saving supplies for new mech";
@@ -6483,27 +6484,59 @@
             spider: { sand: 0.65, swamp: 0.78, forest: 0.75, jungle: 0.65, rocky: 1.2,  gravel: 0.75, muddy: 0.82, grass: 1,    brush: 0.95, concrete: 1},
             hover:  { sand: 1,    swamp: 1.2,  forest: 0.48, jungle: 0.35, rocky: 0.68, gravel: 1,    muddy: 1.08, grass: 1,    brush: 0.7,  concrete: 1}
         },
+        // StatusMod entries recognize both normal-game and warlord equipment/chassis names.
+        // Warlord clauses (e.g. 'cold','heat','manashield','stoneskin','athletic','echo','darkvision','thermal'
+        // equipment; 'minotaur','hydra','flying_imp','harpy','dragon','golem','barghest','snake' chassis)
+        // can never appear on a non-warlord mech, so non-warlord behavior is identical to the original.
+        // Maps warlord chassis to its normal-game terrain-class equivalent (per portal.js:7392-7580 case grouping).
+        // Lets SmallChassisMod / LargeChassisMod be reused for warlord chassis without duplicating tables.
+        WarlordChassisFamily: {
+            imp: 'biped', flying_imp: 'hover', hound: 'wheel', harpy: 'tread', barghest: 'quad',
+            cambion: 'biped', minotaur: 'spider', nightmare: 'wheel', rakshasa: 'tread', golem: 'quad',
+            dragon: 'tread', snake: 'hover', gorgon: 'biped', hydra: 'spider'
+        },
         StatusMod: {
-            freeze: (mech) => !mech.equip.includes('radiator') ? 0.25 : 1,
-            hot: (mech) => !mech.equip.includes('coolant') ? 0.25 : 1,
-            corrosive: (mech) => !mech.equip.includes('ablative') ? mech.equip.includes('shields') ? 0.75 : 0.25 : 1,
-            humid: (mech) => !mech.equip.includes('seals') ? 0.75 : 1,
-            windy: (mech) => mech.chassis === 'hover' ? 0.5 : 1,
-            hilly: (mech) => mech.chassis !== 'spider' ? 0.75 : 1,
-            mountain: (mech) => mech.chassis !== 'spider' && !mech.equip.includes('grapple') ? mech.equip.includes('flare') ? 0.75 : 0.5 : 1,
-            radioactive: (mech) => !mech.equip.includes('shields') ? 0.5 : 1,
-            quake: (mech) => !mech.equip.includes('stabilizer') ? 0.25 : 1,
-            dust: (mech) => !mech.equip.includes('seals') ? 0.5 : 1,
-            river: (mech) => mech.chassis !== 'hover' ? 0.65 : 1,
-            tar: (mech) => mech.chassis !== 'quad' ? mech.chassis === 'tread' || mech.chassis === 'wheel' ? 0.5 : 0.75 : 1,
-            steam: (mech) => !mech.equip.includes('shields') ? 0.75 : 1,
-            flooded: (mech) => mech.chassis !== 'hover' ? 0.35 : 1,
-            fog: (mech) => !mech.equip.includes('sonar') ? 0.2 : 1,
-            rain: (mech) => !mech.equip.includes('seals') ? 0.75 : 1,
-            hail: (mech) => !mech.equip.includes('ablative') && !mech.equip.includes('shields') ? 0.75 : 1,
-            chasm: (mech) => !mech.equip.includes('grapple') ? 0.1 : 1,
-            dark: (mech) => !mech.equip.includes('infrared') ? mech.equip.includes('flare') ? 0.25 : 0.1 : 1,
-            gravity: (mech) => mech.size === 'titan' ? 0.25 : mech.size === 'large' ? 0.45 : mech.size === 'medium' ? 0.8 : 1,
+            freeze: (mech) => mech.equip.includes('radiator') || mech.equip.includes('cold') ? 1 : 0.25,
+            hot: (mech) => mech.equip.includes('coolant') || mech.equip.includes('heat') ? 1 : 0.25,
+            corrosive: (mech) => mech.equip.includes('ablative') ? 1
+                : mech.equip.includes('stoneskin') ? 0.9
+                : mech.equip.includes('shields') ? 0.75
+                : mech.equip.includes('manashield') ? 0.5
+                : 0.25,
+            humid: (mech) => mech.equip.includes('seals') ? 1 : mech.equip.includes('heat') ? 0.85 : 0.75,
+            windy: (mech) => ['hover','flying_imp','harpy','dragon'].includes(mech.chassis) ? 0.5 : 1,
+            hilly: (mech) => ['spider','minotaur','hydra','flying_imp','harpy','dragon'].includes(mech.chassis) ? 1 : 0.75,
+            mountain: (mech) => ['spider','minotaur','hydra'].includes(mech.chassis) || mech.equip.includes('grapple') ? 1
+                : mech.equip.includes('flare') || mech.equip.includes('echo') ? 0.75
+                : 0.5,
+            radioactive: (mech) => mech.equip.includes('shields') || mech.equip.includes('manashield') ? 1 : 0.5,
+            quake: (mech) => mech.equip.includes('stabilizer') ? 1 : mech.equip.includes('athletic') ? 0.75 : 0.25,
+            dust: (mech) => mech.equip.includes('seals') || mech.equip.includes('thermal') ? 1 : 0.5,
+            river: (mech) => ['hover','flying_imp','harpy','dragon'].includes(mech.chassis) ? 1 : 0.65,
+            tar: (mech) => mech.chassis === 'quad' ? 1 : (mech.chassis === 'tread' || mech.chassis === 'wheel' ? 0.5 : 0.75),
+            steam: (mech) => mech.equip.includes('shields') || mech.equip.includes('manashield') || mech.equip.includes('heat') ? 1 : 0.75,
+            flooded: (mech) => mech.chassis === 'hover' ? 1 : mech.chassis === 'snake' ? 0.85 : 0.35,
+            fog: (mech) => mech.equip.includes('sonar') || mech.equip.includes('echo') ? 1 : 0.2,
+            rain: (mech) => mech.equip.includes('seals') ? 1 : mech.equip.includes('cold') ? 0.9 : 0.75,
+            hail: (mech) => mech.equip.includes('ablative') || mech.equip.includes('shields') || mech.equip.includes('manashield') || mech.equip.includes('stoneskin') ? 1 : 0.75,
+            chasm: (mech) => mech.equip.includes('grapple') || ['flying_imp','harpy','dragon'].includes(mech.chassis) ? 1
+                : mech.equip.includes('athletic') ? 0.35
+                : 0.1,
+            dark: (mech) => mech.equip.includes('infrared') || mech.equip.includes('darkvision') ? 1
+                : mech.equip.includes('flare') ? 0.25
+                : 0.1,
+            gravity: (mech) => {
+                let r = 1;
+                if (mech.size === 'titan') r = 0.25;
+                else if (mech.size === 'large') r = 0.45;
+                else if (mech.size === 'medium') r = 0.8;
+                else if (mech.size === 'archfiend') r = 0.35;
+                else if (mech.size === 'cyberdemon') r = 0.5;
+                else if (mech.size === 'fiend') r = 0.8;
+                if (['flying_imp','harpy','dragon'].includes(mech.chassis)) r -= 0.15;
+                if (mech.equip.includes('athletic') && r < 1) r += 0.1;
+                return r;
+            },
         },
 
         get collectorValue() {
@@ -6531,10 +6564,6 @@
         },
 
         initLab() {
-            // TODO: Warlord is not supported yet and breaks a bunch of things, remove when support is implemented
-            if (game.global.race['warlord']) {
-                return false;
-            }
             if (buildings.SpireMechBay.count < 1) {
                 return false;
             }
@@ -6575,6 +6604,14 @@
                     this.updateBestBody(size);
                     this.bestMech[size] = this.getRandomMech(size);
                 });
+                // For warlord: alias normal-size keys to warlord-size keys so bestMech lookup works
+                // when bestSize/bestGems/bestSupply contain warlord-size strings (from m.size after translation).
+                if (game.global.race['warlord']) {
+                    const SIZE_TO_WARLORD = { small: 'minion', medium: 'fiend', large: 'cyberdemon', titan: 'archfiend' };
+                    Object.entries(SIZE_TO_WARLORD).forEach(([normal, warlord]) => {
+                        this.bestMech[warlord] = this.bestMech[normal];
+                    });
+                }
                 let sortBy = (prop) => Object.values(this.bestMech)
                   .filter(m => m.size !== 'collector')
                   .sort((a, b) => b[prop] - a[prop])
@@ -6599,9 +6636,14 @@
 
         getBodyMod(mech) {
             let floor = game.global.portal.spire;
-            let terrainFactor = mech.size === 'small' || mech.size === 'medium' ?
-                this.SmallChassisMod[mech.chassis][floor.type]:
-                this.LargeChassisMod[mech.chassis][floor.type];
+            // Map warlord chassis (imp/hydra/etc) to its normal-game terrain class (biped/spider/etc).
+            // Falls through unchanged for normal-game chassis names.
+            let chassisKey = this.WarlordChassisFamily[mech.chassis] || mech.chassis;
+            // small-tier sizes use SmallChassisMod (per portal.js:7398-7547 ['small','medium','minion','fiend'] grouping).
+            let smallTier = ['small','medium','minion','fiend'].includes(mech.size);
+            let terrainFactor = smallTier ?
+                this.SmallChassisMod[chassisKey][floor.type]:
+                this.LargeChassisMod[chassisKey][floor.type];
 
             let rating = poly.terrainRating(mech, terrainFactor, Object.keys(floor.status));
             for (let effect in floor.status) {
@@ -6633,6 +6675,15 @@
                     return 0.012 * (isConcrete ? 1.25 : 1);
                 case 'collector': // For collectors we're calculating supply rate
                     return 25 / this.collectorValue;
+                // Warlord sizes
+                case 'minion':
+                    return 0.0015 * (isConcrete ? 0.92 : 1);
+                case 'fiend':
+                    return 0.006 * (isConcrete ? 0.95 : 1);
+                case 'cyberdemon':
+                    return 0.009;
+                case 'archfiend':
+                    return 0.011 * (mech.chassis !== 'hydra' ? 2 : 1) * (isConcrete ? 1.25 : 1);
             }
             return 0;
         },
@@ -6652,6 +6703,19 @@
 
         getPreferredSize() {
             let mechBay = game.global.portal.mechbay;
+
+            // Warlord: skip both collector branches (mechCollect x0.1 makes them inefficient),
+            // translate user-configured size keys to warlord equivalents.
+            if (game.global.race['warlord']) {
+                if (mechBay.scouts * 2 / mechBay.max < settings.mechScouts) {
+                    return ['minion', true];
+                }
+                const SIZE_TO_WARLORD = { small: 'minion', medium: 'fiend', large: 'cyberdemon', titan: 'archfiend' };
+                let configured = game.global.portal.spire.status.gravity ? settings.mechSizeGravity : settings.mechSize;
+                let translated = SIZE_TO_WARLORD[configured] ?? 'archfiend';
+                return [translated, false];
+            }
+
             if (settings.mechFillBay && mechBay.max - mechBay.bay === 1) {
                 let collectorsCount = this.activeMechs.filter(mech => mech.size === 'collector').length;
                 if (collectorsCount < Math.floor(mechBay.max * settings.mechMaxCollectors)) {
@@ -6704,7 +6768,56 @@
             return this.mechsPower > 0 ? (100 - game.global.portal.spire.progress) / (this.mechsPower * this.getProgressMod()) : Number.MAX_SAFE_INTEGER;
         },
 
+        // Hardcoded warlord blueprint generator.
+        // Archfiend defaults to hydra (4 forced elements: cold/shock/fire/acid) with a hazard-breadth equip
+        // loadout; the 5th equip slot rotates between athletic/echo/thermal for varied hazard coverage.
+        // Minions are scout-imps with kinetic/missile/flame to cover hydra's weak bosses (bone_golem,
+        // zombie, raptor) and a scouter equip that doubles their scout count.
+        // No collector path: warlord mechCollect is x0.1 (portal.js:7595), so scavenger-minions are
+        // dramatically less efficient than just building more archfiends.
+        // Accepts both normal-game size keys (small/medium/large/titan) and warlord-native ones,
+        // so callers in initLab's Size iteration get consistent warlord blueprints.
+        getWarlordMech(size) {
+            const SIZE_TO_WARLORD = { small: 'minion', medium: 'fiend', large: 'cyberdemon', titan: 'archfiend' };
+            if (SIZE_TO_WARLORD[size]) size = SIZE_TO_WARLORD[size];
+
+            let pick = arr => arr[Math.floor(Math.random() * arr.length)];
+
+            if (size === 'minion') {
+                return {
+                    size,
+                    chassis: pick(['imp', 'flying_imp']),
+                    hardpoint: [pick(['kinetic', 'missile', 'flame'])],
+                    equip: ['scouter'],
+                    infernal: false
+                };
+            }
+            if (size === 'archfiend') {
+                let chassis = settings.mechWarlordPreferHydra
+                    ? 'hydra'
+                    : pick(['hydra', 'dragon', 'snake', 'gorgon']);
+                let flex = pick(['athletic', 'echo', 'thermal']);
+                let equip = ['cold', 'heat', 'manashield', 'darkvision', flex];
+                let fallbackWep = (this.bestWeapon && this.bestWeapon.length > 0)
+                    ? this.bestWeapon[Math.floor(Math.random() * this.bestWeapon.length)]
+                    : 'cold';
+                let hardpoint = chassis === 'hydra'
+                    ? ['cold', 'shock', 'fire', 'acid']
+                    : Array(2).fill(fallbackWep);
+                return { size, chassis, hardpoint, equip, infernal: false };
+            }
+            // fiend / cyberdemon fallback - rarely picked since titan->archfiend mapping makes these uncommon
+            return { size, chassis: 'cambion', hardpoint: ['cold'], equip: ['heat'], infernal: false };
+        },
+
         updateBestBody(size) {
+            // Warlord uses a hardcoded blueprint instead of full chassis x equip enumeration.
+            // Populate bestBody so mechsPotential calculation in initLab still works.
+            if (game.global.race['warlord']) {
+                this.bestBody[size] = [this.getWarlordMech(size)];
+                return;
+            }
+
             let currentBestBodyMod = 0;
             let currentBestBodyList = [];
 
@@ -6758,6 +6871,10 @@
         },
 
         getRandomMech(size) {
+            if (game.global.race['warlord']) {
+                let mech = this.getWarlordMech(size);
+                return {...mech, ...this.getMechStats(mech)};
+            }
             let randomBody = this.bestBody[size][Math.floor(Math.random() * this.bestBody[size].length)];
             let randomWeapon = this.bestWeapon[Math.floor(Math.random() * this.bestWeapon.length)];
             let weaponsAmount = this.SizeWeapons[size];
@@ -10638,6 +10755,7 @@ declare global {
             buildingMechsFirst: true,
             mechBaysFirst: true,
             mechWaygatePotential: 0.4,
+            mechWarlordPreferHydra: true,
         }
 
         applySettings(def, reset);
@@ -15069,7 +15187,7 @@ declare global {
                 // Disable Waygate once it cleared, or if we're going to use bomb, or current potential is too hight
                 if (building === buildings.SpireWaygate && (haveTech("waygate", 3)
                      || (settings.prestigeDemonicBomb && settings.prestigeType === "demonic" && game.global.stats.spire[poly.universeAffix()]?.dlstr > 0)
-                     || (settings.autoMech && MechManager.mechsPotential > settings.mechWaygatePotential && !(settings.autoPrestige && settings.prestigeType === "demonic" && buildings.SpireTower.count >= settings.prestigeDemonicFloor)))) {
+                     || (settings.autoMech && !game.global.race['warlord'] && MechManager.mechsPotential > settings.mechWaygatePotential && !(settings.autoPrestige && settings.prestigeType === "demonic" && buildings.SpireTower.count >= settings.prestigeDemonicFloor)))) {
                       maxStateOn = 0;
                 }
                 // Once we unlocked Embassy - we don't need scouts and corvettes until we'll have piracy. Let's freeup support for more Bolognium ships
@@ -16383,7 +16501,7 @@ declare global {
 
     function autoMech() {
         let m = MechManager;
-        if (game.global.race['warlord'] || !m.initLab() || $(`#mechList .mechRow[draggable=true]`).length > 0) {
+        if (!m.initLab() || $(`#mechList .mechRow[draggable=true]`).length > 0) {
             return;
         }
         let mechBay = game.global.portal.mechbay;
@@ -16432,7 +16550,13 @@ declare global {
 
         let newMech = {};
         let newSize, forceBuild;
-        if (settings.mechBuild === "random") {
+        // Warlord with prefer-hydra has its own hardcoded blueprint logic; ignore mechBuild='user'
+        // (otherwise the same blueprint set by the previous build would loop forever).
+        let effectiveBuild = settings.mechBuild;
+        if (game.global.race['warlord'] && settings.mechWarlordPreferHydra && effectiveBuild === "user") {
+            effectiveBuild = "random";
+        }
+        if (effectiveBuild === "random") {
             [newSize, forceBuild] = m.getPreferredSize();
 
             // Build titans for Eden patrol if needed
@@ -16454,7 +16578,7 @@ declare global {
             }
 
             newMech = m.getRandomMech(newSize);
-        } else if (settings.mechBuild === "user") {
+        } else if (effectiveBuild === "user") {
             newMech = {...mechBay.blueprint, ...m.getMechStats(mechBay.blueprint)};
         } else { // mechBuild === "none"
             return; // Mech build disabled, stop here
@@ -16485,7 +16609,13 @@ declare global {
 
         let canExpandBay = settings.autoBuild && settings.mechBaysFirst && buildings.SpireMechBay.isAutoBuildable() && (buildings.SpireMechBay.isAffordable(true) || (buildings.SpirePurifier.isAutoBuildable() && buildings.SpirePurifier.isAffordable(true) && buildings.SpirePurifier.stateOffCount === 0));
         let mechScrap = settings.mechScrap;
-        if (canExpandBay && resources.Supply.currentQuantity < resources.Supply.maxQuantity && !prolongActive && resources.Supply.rateOfChange >= settings.mechMinSupply) {
+        // Warlord with prefer-hydra: blueprints are deterministic except for a randomized flex equip slot.
+        // The flex re-rolls each time stateHash changes (e.g. when a scout is built), and old hydras with
+        // a different flex score lower than the freshly-rolled best -> they get flagged for scrap and
+        // rebuilt every tick. Disable scrap entirely; all hydras are "good enough" for the simple heuristic.
+        if (game.global.race['warlord'] && settings.mechWarlordPreferHydra) {
+            mechScrap = "none";
+        } else if (canExpandBay && resources.Supply.currentQuantity < resources.Supply.maxQuantity && !prolongActive && resources.Supply.rateOfChange >= settings.mechMinSupply) {
             // We can build purifier or bay once we'll have enough resources, do not rebuild old mechs
             // Unless floor just changed, and scrap income fall to low, so we need to rebuild them to fix it
             mechScrap = "none";
@@ -16940,8 +17070,9 @@ declare global {
 
             // only reserve gems if we have bay space
             if (baySpace > 0) {
+                let useRandom = settings.mechBuild === "random" || (game.global.race['warlord'] && settings.mechWarlordPreferHydra && settings.mechBuild === "user");
                 let newSize = !haveTask("mech") ?
-                    (settings.mechBuild === "random" ? MechManager.getPreferredSize()[0] : mechBay.blueprint.size) :
+                    (useRandom ? MechManager.getPreferredSize()[0] : mechBay.blueprint.size) :
                     "titan";
                 let [newGems, newSupply, newSpace] = MechManager.getMechCost({ size: newSize });
 
@@ -21228,18 +21359,44 @@ declare global {
         addSettingsSelect(currentNode, "mechBuild", "Build mechs", "Configures what will be built. Infernal mechs won't ever be built.", buildOptions);
 
         // TODO: Make auto truly auto - some way to pick best "per x", depends on current bottleneck
+        // Warlord: size dropdown shows warlord names (Minion/Fiend/Cyberdemon/Archfiend) but underlying setting keys
+        // stay as small/medium/large/titan/collector for save compatibility; getPreferredSize translates them.
+        const WARLORD_SIZE_LABELS = { small: 'minion', medium: 'fiend', large: 'cyberdemon', titan: 'archfiend' };
+        let sizeLabel = (id) => {
+            if (game.global.race['warlord']) {
+                let warlordId = WARLORD_SIZE_LABELS[id];
+                if (warlordId) return game.loc(`portal_mech_size_${warlordId}`);
+                if (id === 'collector') return game.loc(`portal_mech_size_${id}`) + ' (n/a)';
+            }
+            return game.loc(`portal_mech_size_${id}`);
+        };
+        let sizeHint = (id) => {
+            if (game.global.race['warlord']) {
+                let warlordId = WARLORD_SIZE_LABELS[id];
+                if (warlordId) return game.loc(`portal_mech_size_${warlordId}_desc`);
+            }
+            return game.loc(`portal_mech_size_${id}_desc`);
+        };
         let sizeOptions = [{val: "auto", label: "Damage Per Size", hint: "Select affordable mech with most damage per size on current floor"},
                            {val: "gems", label: "Damage Per Gems", hint: "Select affordable mech with most damage per gems on current floor"},
                            {val: "supply", label: "Damage Per Supply", hint: "Select affordable mech with most damage per supply on current floor"},
-                            ...MechManager.Size.map(id => ({val: id, label: game.loc(`portal_mech_size_${id}`), hint: game.loc(`portal_mech_size_${id}_desc`)}))];
+                            ...MechManager.Size.map(id => ({val: id, label: sizeLabel(id), hint: sizeHint(id)}))];
         addSettingsSelect(currentNode, "mechSize", "Preferred mech size", "Size of random mechs", sizeOptions);
         addSettingsSelect(currentNode, "mechSizeGravity", "Gravity mech size", "Override preferred size with this on floors with high gravity", sizeOptions);
 
-        let specialOptions = [{val: "always", label: "Always", hint: "Add special equipment to all mechs"},
-                              {val: "prefered", label: "Preferred", hint: "Add special equipment when it doesn't reduce efficiency for current floor"},
-                              {val: "random", label: "Random", hint: "Special equipment will have same chance to be added as all others"},
-                              {val: "never", label: "Never", hint: "Never add special equipment"}];
-        addSettingsSelect(currentNode, "mechSpecial", "Special mechs", "Configures special equip", specialOptions);
+        // mechSpecial is inert in warlord (no 'special' equipment exists). Hide row.
+        if (!game.global.race['warlord']) {
+            let specialOptions = [{val: "always", label: "Always", hint: "Add special equipment to all mechs"},
+                                  {val: "prefered", label: "Preferred", hint: "Add special equipment when it doesn't reduce efficiency for current floor"},
+                                  {val: "random", label: "Random", hint: "Special equipment will have same chance to be added as all others"},
+                                  {val: "never", label: "Never", hint: "Never add special equipment"}];
+            addSettingsSelect(currentNode, "mechSpecial", "Special mechs", "Configures special equip", specialOptions);
+        }
+        // Warlord-only: prefer hydra for archfiend builds
+        if (game.global.race['warlord']) {
+            addSettingsToggle(currentNode, "mechWarlordPreferHydra", "Prefer hydra archfiends", "When building archfiends, always pick hydra chassis (4 forced elements cold/shock/fire/acid; most versatile, no terrain matchup below 0.65). Disable to let the script pick randomly between hydra/dragon/snake/gorgon.");
+        }
+        // mechWaygatePotential is ignored in warlord (fixed loadout = no potential headroom to gate on); the Waygate trigger at line 15163 already skips it.
         addSettingsNumber(currentNode, "mechWaygatePotential", "Maximum mech potential for Waygate", "Fight Demon Lord only when current mech team potential below given amount. Full bay of best mechs will have `1` potential. Damage against Demon Lord does not affected by floor modifiers, all mechs always does 100% damage to him. Thus it's most time-efficient to fight him at times when mechs can't make good progress against regular monsters, and waiting for rebuilding. Auto Power needs to be on for this to work.");
         addSettingsNumber(currentNode, "mechMinSupply", "Minimum supply income", "Build collectors if current supply income below given number");
         addSettingsNumber(currentNode, "mechMaxCollectors", "Maximum collectors ratio", "Limiter for above option, maximum space used by collectors. 0.5 means up to 50% of total bay capacity will be dedicated to collectors, and such.");
@@ -24448,7 +24605,7 @@ declare global {
         // function taxCap(min) from civics.js
         taxCap: function(e){let a=(haveTech("currency",5)||game.global.race.terrifying)&&!game.global.race.noble;if(e)return a?0:traitVal("noble",0,10);{let e=traitVal("noble",1,30);return a&&(e+=20),"oligarchy"===game.global.civic.govern.type&&(e+=("bureaucrat"===getGovernor()?25:20)),"noble"===getGovernor()&&(e+=20),(game.global.race['wish'] && game.global.race['wishStats'])&&(e+=game.global.race.wishStats.tax),e}},
         // export function mechCost(size,infernal) from portal.js
-        mechCost: function(e,a,x){let l=9999,r=1e7;switch(e){case"small":{let e=(x??game.global.blood.prepared)>=2?5e4:75e3;r=a?2.5*e:e,l=a?20:1}break;case"medium":r=a?45e4:18e4,l=a?100:4;break;case"large":r=a?925e3:375e3,l=a?500:20;break;case"titan":r=a?15e5:75e4,l=a?1500:75;break;case"collector":{let e=(x??game.global.blood.prepared)>=2?8e3:1e4;r=a?2.5*e:e,l=1}}return{s:l,c:r}},
+        mechCost: function(e,a,x){let l=9999,r=1e7;switch(e){case"small":{let e=(x??game.global.blood.prepared)>=2?5e4:75e3;r=a?2.5*e:e,l=a?20:1}break;case"medium":r=a?45e4:18e4,l=a?100:4;break;case"large":r=a?925e3:375e3,l=a?500:20;break;case"titan":r=a?15e5:75e4,l=a?1500:75;break;case"collector":{let e=(x??game.global.blood.prepared)>=2?8e3:1e4;r=a?2.5*e:e,l=1}break;case"minion":{let e=(x??game.global.blood.prepared)>=2?3e4:5e4;r=a?2.5*e:e,l=a?10:1}break;case"fiend":r=a?3e5:125e3,l=a?40:4;break;case"cyberdemon":r=a?625e3:25e4,l=a?120:12;break;case"archfiend":r=a?12e5:6e5,l=a?250:25;break;}return{s:l,c:r}},
         // function terrainRating(mech,rating,effects) from portal.js
         terrainRating: function(e,i,s,x){return!e.equip.includes("special")||"small"!==e.size&&"medium"!==e.size&&"collector"!==e.size||i<1&&(i+=(1-i)*(s.includes("gravity")?.1:.2)),"small"!==e.size&&i<1&&(i+=(s.includes("fog")||s.includes("dark")?.005:.01)*(x??game.global.portal.mechbay.scouts))>1&&(i=1),i},
         // function weaponPower(mech,power) from portal.js
