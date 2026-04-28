@@ -3447,7 +3447,9 @@
                       return "Building mechs...";
                   }
                   let mechBay = game.global.portal.mechbay;
-                  let newSize = !haveTask("mech") ? settings.mechBuild === "random" ? MechManager.getPreferredSize()[0] : mechBay.blueprint.size : "titan";
+                  // Warlord+preferHydra overrides mechBuild='user' to 'random' in autoMech, so predict using getPreferredSize for consistency.
+                  let useRandom = settings.mechBuild === "random" || (MechManager.WarlordHydra.isActive() && settings.mechBuild === "user");
+                  let newSize = !haveTask("mech") ? useRandom ? MechManager.getPreferredSize()[0] : mechBay.blueprint.size : "titan";
                   let [newGems, newSupply, newSpace] = MechManager.getMechCost({size: newSize});
                   if (newSpace <= mechBay.max - mechBay.bay && newSupply <= resources.Supply.maxQuantity && newGems <= resources.Soul_Gem.currentQuantity) {
                       return "Saving supplies for new mech";
@@ -6846,21 +6848,6 @@
                 }
                 return ['archfiend', false];
             },
-
-            // Snippet-style blueprint update: pick next-needed mech (scout-imp or hydra) and write it
-            // to mechBay.blueprint via vue methods. autoMech then runs through its existing 'user' mode
-            // path, which reads mechBay.blueprint. Lets us bypass getRandomMech/getPreferredSize for
-            // the build path entirely.
-            syncBlueprint(mechBay, vue) {
-                let [size] = this.preferredSize(mechBay);
-                let bp = size === 'minion' ? this.scoutImp() : this.archfiend();
-                vue.b.infernal = bp.infernal;
-                vue.setSize(bp.size);
-                vue.setType(bp.chassis);
-                bp.hardpoint.forEach((w, i) => vue.setWep(w, i));
-                bp.equip.forEach((e, i) => vue.setEquip(e, i));
-                return bp;
-            },
         },
 
         // Warlord blueprint dispatcher. Delegates to WarlordHydra strategy when preferHydra is on; otherwise
@@ -6892,8 +6879,9 @@
         },
 
         updateBestBody(size) {
-            // Warlord uses a hardcoded blueprint instead of full chassis x equip enumeration.
-            // Populate bestBody so mechsPotential calculation in initLab still works.
+            // Warlord: skip the chassis x equip enumeration entirely (bestBody is unread in warlord
+            // code paths — getRandomMech bypasses it and scrap is forced off in preferHydra). Populate
+            // with a single warlord blueprint as a defensive placeholder.
             if (game.global.race['warlord']) {
                 this.bestBody[size] = [this.getWarlordMech(size)];
                 return;
@@ -16608,17 +16596,19 @@ declare global {
             return; // Can't do much while having disabled mechs, without scrapping them all. And that's really bad idea. Just wait until bays will be enabled back.
         }
 
-        // Reorder mechs for Eden patrol - move titan mechs to front (most space-efficient for Eden due to +10% boss bonus and 4 weapons)
+        // Reorder mechs for Eden patrol - move biggest mechs to front (most space-efficient for Eden due to +10% boss bonus and 4 weapons).
+        // Warlord uses archfiend as patrol equivalent (titan size doesn't exist).
+        let patrolSize = game.global.race['warlord'] ? "archfiend" : "titan";
         if (settings.mechOptimizeEden && game.global.eden?.mech_station?.count >= 10 && game.global.eden.mech_station.mode > 0) {
             let patrolCount = game.global.eden.mech_station.mechs ?? 0;
             if (patrolCount > 0) {
-                // Find first mech in patrol range that's NOT titan
-                let wrongSizeIdx = m.activeMechs.findIndex((mech, idx) => idx < patrolCount && mech.size !== "titan");
+                // Find first mech in patrol range that's NOT the patrol size
+                let wrongSizeIdx = m.activeMechs.findIndex((mech, idx) => idx < patrolCount && mech.size !== patrolSize);
                 if (wrongSizeIdx >= 0) {
-                    // Find a titan mech outside patrol range to swap in
-                    let titanMech = m.activeMechs.find((mech, idx) => idx >= patrolCount && mech.size === "titan");
-                    if (titanMech) {
-                        m.dragMech(titanMech.id, wrongSizeIdx);
+                    // Find a patrol-size mech outside patrol range to swap in
+                    let patrolMech = m.activeMechs.find((mech, idx) => idx >= patrolCount && mech.size === patrolSize);
+                    if (patrolMech) {
+                        m.dragMech(patrolMech.id, wrongSizeIdx);
                         return; // One drag per tick to avoid issues
                     }
                 }
@@ -16632,30 +16622,32 @@ declare global {
         let newMech = {};
         let newSize, forceBuild;
         let effectiveBuild = settings.mechBuild;
-        // Warlord+preferHydra: snippet-style flow. Pick next-needed mech (scout-imp or hydra), write it
-        // to mechBay.blueprint via vue methods, and use 'user' mode for the build path. Avoids needing
-        // overrides scattered around the optimizer (getRandomMech, bay-gate predictions, etc.).
-        if (m.WarlordHydra.isActive() && effectiveBuild !== "none") {
-            m.WarlordHydra.syncBlueprint(mechBay, m._assemblyVue);
-            effectiveBuild = "user";
+        // Warlord+preferHydra: ignore mechBuild='user' (its blueprint persists, causing same-mech loops).
+        // Force 'random' mode so getRandomMech (warlord branch) generates a fresh in-memory blueprint each
+        // tick — but buildMech only writes it to the UI when affordability check below passes, so the
+        // mechBay.blueprint UI doesn't churn when soul gems are reserved for other things.
+        if (m.WarlordHydra.isActive() && effectiveBuild === "user") {
+            effectiveBuild = "random";
         }
         if (effectiveBuild === "random") {
             [newSize, forceBuild] = m.getPreferredSize();
 
-            // Build titans for Eden patrol if needed
+            // Build patrol-size mechs (titan / archfiend for warlord) for Eden patrol if needed.
             // mech_station.mechs is dynamic — it's how many mechs the game consumed this tick to suppress hostility.
-            // When all patrol mechs are already titans, mechs === titansInPatrol, so we also check
-            // whether hostility is fully suppressed (effect at max) to decide if more titans are needed.
-            if (settings.mechOptimizeEden && game.global.eden?.mech_station?.count >= 10 && game.global.eden.mech_station.mode > 0) {
+            // When all patrol mechs are already at patrol size, mechs === patrolInPatrol, so we also check
+            // whether hostility is fully suppressed (effect at max) to decide if more are needed.
+            // Skip when forceBuild is set (scouts / collectors are forced priorities — getPreferredSize
+            // returns force=true for those — and shouldn't be preempted by patrol fill).
+            if (!forceBuild && settings.mechOptimizeEden && game.global.eden?.mech_station?.count >= 10 && game.global.eden.mech_station.mode > 0) {
                 let patrolCount = game.global.eden.mech_station.mechs ?? 0;
-                let titansInPatrol = m.activeMechs.filter((mech, idx) => idx < patrolCount && mech.size === "titan").length;
+                let patrolInPatrol = m.activeMechs.filter((mech, idx) => idx < patrolCount && mech.size === patrolSize).length;
                 let maxEffect = game.global.eden.mech_station.mode >= 5 ? 120 : game.global.eden.mech_station.mode === 4 ? 110 : 100;
-                let needMoreTitans = titansInPatrol < patrolCount || (game.global.eden.mech_station.effect ?? 0) < maxEffect;
-                if (needMoreTitans) {
-                    // Need more titans for patrol - check if we can afford one
-                    let {s, c} = poly.mechCost("titan");
+                let needMorePatrol = patrolInPatrol < patrolCount || (game.global.eden.mech_station.effect ?? 0) < maxEffect;
+                if (needMorePatrol) {
+                    // Need more patrol mechs - check if we can afford one
+                    let {s, c} = poly.mechCost(patrolSize);
                     if (resources.Soul_Gem.spareQuantity >= s && resources.Supply.maxQuantity >= c) {
-                        newSize = "titan";
+                        newSize = patrolSize;
                     }
                 }
             }
@@ -17153,8 +17145,10 @@ declare global {
 
             // only reserve gems if we have bay space
             if (baySpace > 0) {
+                // Warlord+preferHydra overrides mechBuild='user' to 'random' in autoMech, so predict using getPreferredSize for consistency.
+                let useRandom = settings.mechBuild === "random" || (MechManager.WarlordHydra.isActive() && settings.mechBuild === "user");
                 let newSize = !haveTask("mech") ?
-                    (settings.mechBuild === "random" ? MechManager.getPreferredSize()[0] : mechBay.blueprint.size) :
+                    (useRandom ? MechManager.getPreferredSize()[0] : mechBay.blueprint.size) :
                     "titan";
                 let [newGems, newSupply, newSpace] = MechManager.getMechCost({ size: newSize });
 
