@@ -14893,6 +14893,21 @@ declare global {
                         maxStateOn--;
                     }
                 }
+            } else if (building === buildings.AsphodelEncampment) {
+                // Encampment power need is partially offset by Soul Engines it enables via Asphodel_Support.
+                // Soul Engine is below encampment in priority list, so its production isn't yet in availablePower.
+                // Pre-credit potential SE output (locally) so we don't disable encampments that are net power-positive.
+                let soulEngine = buildings.AsphodelSoulEngine;
+                let sePower = -soulEngine.powered;
+                let seCount = soulEngine.count;
+                let supportPer = building.definition.support();
+                while (maxStateOn > 0) {
+                    let seActive = Math.min(seCount, maxStateOn * supportPer);
+                    if (availablePower + seActive * sePower >= maxStateOn * building.powered) {
+                        break;
+                    }
+                    maxStateOn--;
+                }
             } else if (building.powered > 0 && building !== buildings.RuinsHellForge) {
                 maxStateOn = Math.min(maxStateOn, availablePower / building.powered);
             }
